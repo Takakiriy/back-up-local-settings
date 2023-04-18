@@ -1,0 +1,21 @@
+#!/bin/bash
+
+#// back-up-multi-local-settings
+#//     A customized back-up-files commands
+#// Operation:
+#//     This script calls back-up-files commands.
+#//     This file can be customized.
+#// Command:
+#//     - back-up-multi-local-settings
+#//     - back-up-multi-local-settings  -r   #// or --restore
+#//     - back-up-multi-local-settings --branch __BranchName__
+#//     - back-up-multi-local-settings --name __BackUpNameWithWildcard__
+#//     - BackUpRootFolder="${PWD}/_back_up_2"  back-up-multi-local-settings
+#// Secret file must define the following variables.
+#//     - THIS_FILE = __Password__   #// A password of zip file. Do not write first hyphen in the secret file
+if echo "$0" | grep -E -v "bash-debug|systemd" > /dev/null; then  cd "${0%/*}"  ;fi  # cd this file folder
+
+../bin/back-up-files  "back-up-multi-local-settings.ini"  "$@"
+
+# Additional back up
+#// lib/back-up-files  "lib/____.ini"  "$@"

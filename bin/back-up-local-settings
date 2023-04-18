@@ -1,0 +1,15 @@
+#!/bin/bash
+
+#// back-up-local-settings
+#//     A customized back-up-files commands
+#// Operation:
+#//     This script calls back-up-files commands.
+#//     This file can be customized.
+#// Command:
+#//     - back-up-local-settings
+#//     - back-up-local-settings  -r   #// or --restore
+#// Secret file must define the following variables.
+#//     - THIS_FILE = __Password__   #// A password of zip file. Do not write first hyphen in the secret file
+if echo "$0" | grep -E -v "bash-debug|systemd" > /dev/null; then  cd "${0%/*}"  ;fi  # cd this file folder
+
+./back-up-files  "./back-up-local-settings.ini"  "$@"

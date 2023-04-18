@@ -1,0 +1,96 @@
+Command:
+    Main files:
+        bin/back-up-local-settings
+            bin/back-up-files
+            bin/back-up-local-settings.ini
+        example_project/.back_up_files.ini
+    Example:
+        cd  __Project__
+        git init  ./back_up
+        bin/back-up-local-settings
+        bin/back-up-local-settings  -r
+        bin/back-up-local-settings
+
+        rm -rf  ./back_up
+        mkdir   ./back_up
+        touch   ./back_up/ThisIsBackUp
+        mkdir -p  "projectX"
+        cp  example_project/.back_up_files.ini  projectX
+        echo  "THIS_FILE = __Secret__"  >  projectX/.env_secret_example
+        mkdir -p  "projectX/sub_project"
+        echo  "THIS_FILE = __Secret__"  >  projectX/sub_project/.env_secret_example
+        cd  test
+
+        BackUpRootFolder=../back_up  WorkingRootFolder=../projectX  ../bin/back-up-local-settings  -r
+        cd  ..
+
+        rm -rf  projectX
+        rm -rf  back_up
+        mkdir   back_up
+        touch   back_up/ThisIsBackUp
+Test:
+    cd  __Project__
+    bin/back-up-files  --test
+    test/test.sh
+Integrated Test Call Tree:  #ref: ${GitHub}/MyPrivateCode/bash/back-up-files/test/test.sh
+    #// test/test.sh
+    (Test1):
+        Test1Direct:
+            # ${Lib}/back-up-files  "test/1_back_up_restore/.back_up_files.ini"
+        Test1ScriptSimple:
+            # ${Bin}/back-up-example
+            back-up-example:
+                # export  ExampleProject="..."
+                # export  ExampleProjectBackUp="..."
+                # lib/back-up-files  "../example_project/.back_up_files.ini"
+                Main (back-up-files):  #ref: ${GitHub}/MyPrivateCode/bash/back-up-files/bin/lib/back-up-files#Main
+                    BackUpFiles:
+        Test1ScriptParentIni:
+            # ${Bin}/back-up-local-settings
+            back-up-local-settings:
+                # lib/back-up-files  "lib/back-up-local-settings.ini"
+                Main (back-up-files):  #ref: ${GitHub}/MyPrivateCode/bash/back-up-files/bin/lib/back-up-files#Main
+    TestMulti:
+            # ${Bin}/back-up-multi-local-settings
+                # lib/back-up-files  "lib/back-up-multi-local-settings.ini"
+Unit Test Call Tree:  #ref: ${GitHub}/MyPrivateCode/bash/back-up-files/bin/lib/back-up-files
+    #// bin/lib/back-up-files  --test
+    TestBackUpAndRestore:
+        TestSub_BackUpOrRestoreFiles:  #// as settings.ini [BackUpFiles]
+            BackUpOrRestoreFiles: #serach: BackUpOrRestoreFiles  back-up-files
+                cp
+        GitCommit:
+            git commit
+    TestBackUpAndRestoreSecret:
+        TestSub_BackUpOrRestoreSecret:  #// as settings.ini [BackUpFiles]
+            BackUpOrRestoreSecret: #search: BackUpOrRestoreSecret  back-up-files
+                zip -e
+    TestBranch:
+        ChangeGitBranch  sub:  #search: ChangeGitBranch  back-up-files
+            git checkout
+        TestSub_BackUpOrRestoreFiles:
+        GitCommit:
+        ChangeGitBranch  main:
+    TestBranch_Move:
+        BackUpFiles: #keyword: BackUpFiles  back-up-files
+            MakeGitWorkingInBackUpIfNew:
+            ChangeGitBranch: #keyword: ChangeGitBranch  back-up-files
+                git checkout
+            # for  line  in "${settingIniFileLines[@]}"; do
+            #     if [ "${name}" == "WorkingBaseFolder" ]; then
+            #     elif [ "${name}" == "File" ]; then
+            #         files=("${files[@]}" "${value}")
+            BackUpOrRestoreFiles: #keyword: BackUpOrRestoreFiles  back-up-files
+                CopyFiles:
+                    mkdir
+                    cp
+            BackUpOrRestoreSecret: #keyword: BackUpOrRestoreSecret  back-up-files
+                if "backup":
+                    zip -e
+                elif "restore": 
+                    unzip -o -P
+            DeleteOtherBranchFiles:
+            GitCommit:
+                git commit
+    TestOtherNewProjectFolder:
+        BackUpFiles:  #search: BackUpFiles  back-up-files

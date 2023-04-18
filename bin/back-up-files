@@ -1,0 +1,1469 @@
+#!/bin/bash
+
+#// back-up-files
+#//     Back up or restore .gitignore specified files
+#// Command:
+#//     - back-up-files __SettingFileName__
+#//     - back-up-files __SettingFileName__ -r  #// or --restore
+#//     - back-up-files __SettingFileName__ --branch __BranchName__
+#//     - back-up-files __SettingFileName__ --name __BackUpNameWithWildcard__
+#//     - BackUpRootFolder=back_up  WorkingRootFolder=/home/user/projectX  back-up-files  __SettingFileName__
+#// Secret file must define the following variables.
+#//     - THIS_FILE = __Password__   #// A password of zip file. Do not write first hyphen in the secret file
+
+PositionalArgs=()
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -r|--restore)  Arguments_Reverse="yes"; shift;;
+        -b|--branch)   Arguments_Branch="yes"; shift;;
+        --test)        Arguments_Test="yes"; shift;;
+        -*) echo "Unknown option $1"; exit 1;;
+        *) PositionalArgs+=("$1"); shift;;
+    esac
+done
+set -- "${PositionalArgs[@]}"  #// set $1, $2, ...
+unset PositionalArgs
+DefaultGitBranch="main"
+BackUpMarkFileName="ThisIsBackUp"  #// This is used by checking back up root folder
+
+function  Main() {
+    local  settingFilePath="$1"
+    if [ "${Arguments_Reverse}" == "" ]; then
+        BackUpFiles backup  "${settingFilePath}"  "${Argument_Branch}"
+    else
+        BackUpFiles restore  "${settingFilePath}"  "${Argument_Branch}"
+    fi
+}
+
+function  BackUpFiles() {
+    echo  "back-up-local-setting:"
+    echo  "root FilesFile: $( readlink -f "${settingFilePath}" )"
+    ReadIniFileAndBackUpFiles  "$1"  "$2"  "$3"  0
+}
+
+function  ReadIniFileAndBackUpFiles() {
+    local  backUpOrRestore="$1"
+    local  settingFilePath="$2"
+    local  branchSpecifiedFromCLI="$3"
+    local  callingNestLevel="$4"
+    settingFilePath="$(x="$( GetFullPath  "${settingFilePath}" )" && echo "$x" || echo "(ERROR:$?)" )"
+    ExitIfMatched  "${settingFilePath}"  '^\(ERROR:([0-9]*)\)$'
+    local  settingFileFolderPath="${settingFilePath%/*}"
+    local  settingFileName="${settingFilePath##*/}"
+    local  previousBranch=":undefined:"
+    local  thisFileInBackUp=""
+    local  workingBaseFolder=""
+    local  backUpBaseFolder=""
+    local  errorCount=0
+    local  inExportParameterBlock="${False}"
+    local  branch="${branchSpecifiedFromCLI}"
+    local  sectionName=""
+    local  commitMessage="update"
+    local  gitPushEnabled="${False}"
+    local  gitSSHCommand=""
+    local  protectedBranches=""
+    local  files=( )
+    local  secretFiles=( )
+    local  exportVariables=( )
+    if [ "${callingNestLevel}" -gt 1 ]; then
+        Error  'ERROR: Too many nest level by FilesFile parameter in "'"${settingFilePath}"'" file.'
+    fi
+    if [ "${backUpOrRestore}" == "restore" ]; then
+        local  filePathsBefore="$( ReadFilePaths "${settingFilePath}" )"
+        local  filePathsAfter=""
+    fi
+
+    local  gitPathAndBranch="$(x="$( ReadGitPathAndBranch "${settingFilePath}" )" && echo "$x" || echo "(ERROR:$?)" )"
+    ExitIfMatched  "${gitPathAndBranch}"  '^\(ERROR:([0-9]*)\)$'
+    local  backUpGitWorkingFolder="${gitPathAndBranch%:*}"  #// left of :
+    if [ "${branchSpecifiedFromCLI}" == "" ]; then
+        branch="${gitPathAndBranch##*:}"  #// right of :
+    fi
+    if [ "${branch}" != "" ]; then
+        if [ "${backUpGitWorkingFolder}" == "" ]; then
+            Error  "Error: BackUpGitWorkingFolder must be specified, if branch was specified."
+        fi
+        if [ "${backUpOrRestore}" == "backup" ]; then
+            MakeGitWorkingInBackUpIfNew backup  "${backUpGitWorkingFolder}"
+        fi
+        previousBranch="$( GetCurrentGitBranch  "${backUpGitWorkingFolder}" )"
+        if [ "${branch}" != "${previousBranch}" ]; then
+            ChangeGitBranch  "${backUpGitWorkingFolder}"  "${branch}"
+        fi
+        if [ "${backUpOrRestore}" == "restore" ]; then
+            thisFileInBackUp="$( ParseIniFileParameterValue  "$( cat "${settingFilePath}" | grep -E 'ThisFileInBackUp *=' )" )"
+            thisFileInBackUp="$( EvaluateAndGetFullPath  "${thisFileInBackUp}"  "${settingFileFolderPath}" )"
+            cp -ap  "${thisFileInBackUp}"  "${settingFilePath}"
+        fi
+    fi
+    AssertExist  "${settingFilePath}"
+    local  settingIniFile="$( cat "${settingFilePath}" )"
+
+    #// Read a setting .ini file
+    local  oldIFS="$IFS"
+    IFS=$'\n'
+    local  settingIniFileLines=( ${settingIniFile} )
+    IFS="$oldIFS"
+    if [ "${backUpOrRestore}" == "restore"  -a  "${branch}" != "" ]; then
+        echo  "BackUpGitWorkingFolder: ${backUpGitWorkingFolder}"
+        echo  "BackUpGitBranch: ${branch}"
+    fi
+
+    for  line  in "${settingIniFileLines[@]}"; do
+        local  lineType="$( ParseIniFileLineType  "${line}" )"
+        if [ "${lineType}" == "parameter" ]; then
+            local  name="$( ParseIniFileParameterName  "${line}" )"
+            local  value="$( ParseIniFileParameterValue  "${line}" )"
+            value="$( Evaluate "${value}" )"
+
+            if [ "${sectionName}" == "Variables" ]; then
+                local  variableValue="$( EvaluateAndGetFullPath "${value}"  "${settingFileFolderPath}" )"
+                DefineVariable  "${name}"  "${variableValue}"
+            elif [ "${name}" == "Name" ]; then
+                :
+            elif [ "${name:0:7}" == "export." ]; then
+                local  variableName="${name:7}"
+                local  variableValue="$( EvaluateAndGetFullPath "${value}"  "${settingFileFolderPath}" )"
+                DefineVariable  "${variableName}"  "${variableValue}"  "export"
+                exportVariables+=( "${variableName}" )
+                if [ "${inExportParameterBlock}" == "${False}" ]; then
+                    Error  "ERROR: export parameter must be set at first parameters or next to Name parameter."
+                fi
+            else  #// Main paramters
+                inExportParameterBlock="${False}"
+                if [ "${name}" == "WorkingBaseFolder" ]; then
+                    if [ "${sectionName}" == "BackUpFiles" ]; then
+                        workingBaseFolder="$( GetFullPath  "${value}"  "${settingFilePath}/.."  --mkdir )"
+                        if [ "${backUpOrRestore}" == "restore" ]; then
+                            echo  "workingBaseFolder: ${workingBaseFolder}"
+                            if [ "${workingBaseFolder}" == ""  -a  "${value}" != "" ]; then
+                                pushd  "${settingFileFolderPath}"  > /dev/null
+
+                                mkdir -p  "${value}"
+                                popd  > /dev/null
+                                workingBaseFolder="$( GetFullPath  "${value}"  "${settingFilePath}/.." )"
+                            fi
+                        fi
+                    else
+                        Error  'ERROR: "WorkingBaseFolder" parameter must be set in "BackUpFiles" section in '"${settingFilePath}"'" file.'
+                    fi
+                elif [ "${name}" == "BackUpBaseFolder" ]; then
+                    if [ "${sectionName}" == "BackUpFiles" ]; then
+                        backUpBaseFolder="$( GetFullPath  "${value}"  "${settingFilePath}/.." )"
+                        if [ "${backUpOrRestore}" == "restore" ]; then
+                            echo  "backUpBaseFolder:  ${backUpBaseFolder}"
+                            if [ "${backUpBaseFolder}" == "" ]; then
+                                echo  "ERROR: Not found BackUpBaseFolder \"${value}\" in \"${settingFilePath}\""  >&2
+                                errorCount=$(( ${errorCount} + 1 ))
+                            fi
+                        fi
+                    else
+                        Error  'ERROR: "BackUpBaseFolder" parameter must be set in "BackUpFiles" section in '"${settingFilePath}"'" file.'
+                    fi
+                elif [ "${name}" == "File" ]; then
+                    if [ "${sectionName}" == "BackUpFiles" ]; then
+                        files=("${files[@]}" "${value}")
+                    else
+                        Error  'ERROR: "File" parameter must be set in "BackUpFiles" section in '"${settingFilePath}"'" file.'
+                    fi
+                elif [ "${name}" == "SecretFile" ]; then 
+                    if [ "${sectionName}" == "BackUpFiles" ]; then
+                        secretFiles=("${secretFiles[@]}" "${value}")
+                    else
+                        Error  'ERROR: "SecretFile" parameter must be set in "BackUpFiles" section in '"${settingFilePath}"'" file.'
+                    fi
+                elif [ "${name}" == "FilesFile" ]; then 
+                    if [ "${sectionName}" == "BackUp" ]; then
+                        local  filesFilePath="${value}"
+                        pushd  "${settingFilePath%/*}"  > /dev/null
+
+                        ReadIniFileAndBackUpFiles  "${backUpOrRestore}"  "${filesFilePath}"  "${branchSpecifiedFromCLI}"  "$(( ${callingNestLevel} + 1 ))"
+                        popd  > /dev/null
+                    else
+                        Error  'ERROR: "FilesFile" parameter must be set in "BackUp" section in '"${settingFilePath}"'" file.'
+                    fi
+                elif [ "${name}" == "ThisFileInWorking" ]; then 
+                    NoOperation
+                elif [ "${name}" == "ThisFileInBackUp" ]; then 
+                    thisFileInBackUp="$( EvaluateAndGetFullPath "${value}"  "${settingFileFolderPath}"  --touch )"
+                elif [ "${name}" == "BackUpGitWorkingFolder" ]; then 
+                    NoOperation  #// This parameter was read in ReadGitPathAndBranch
+                elif [ "${name}" == "BackUpGitBranch" ]; then 
+                    NoOperation  #// This parameter was read in ReadGitPathAndBranch
+                elif [ "${name}" == "CommitMessage" ]; then 
+                    commitMessage="${value}"
+                elif [ "${name}" == "GitPush" ]; then 
+                    if [ "${value}" != ""  -a  "${value}" != "false" ]; then
+                        gitPushEnabled="${True}"
+                    fi
+                elif [ "${name}" == "GitSSHCommand" ]; then 
+                    gitSSHCommand="${value}"
+                elif [ "${name}" == "ProtectedBranches" ]; then 
+                    protectedBranches="${value}"
+                else
+                    echo  "Invalid parameter name: \"${name}\" in ${settingFilePath}" >&2
+                fi
+            fi
+            if [ "${name}" == "File"  -o  "${name}" == "SecretFile" ]; then  #// continuation
+                local  appendingPath="$( GetFullPath  "${value}"  "${workingBaseFolder}"  --touch )"
+                filePathsAfter="$( AppendToNextLine  "${filePathsAfter}"  "${appendingPath}" )"
+            fi
+        elif [ "${lineType}" == "section" ]; then
+            local  newSectionName="$( ParseIniFileSectionName "${line}" )"
+            if [ "${sectionName}" == "BackUpFiles" ]; then
+                if [ "${branch}" != ""  -a  "${backUpGitWorkingFolder}" == "" ]; then
+                    echo  "Error: BackUpGitWorkingFolder must be specidied before any section"
+                fi
+                if [ "${workingBaseFolder}" != ""  -a  "${backUpBaseFolder}" != "" ]; then
+
+                    #// Back up or restore files (1)
+                    EchoBackUpPaths  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${settingFilePath}"
+                    CheckNoError  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${settingFilePath}"
+                    BackUpOrRestoreFiles   "${backUpOrRestore}"  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${files[@]}"
+                    BackUpOrRestoreSecret  "${backUpOrRestore}"  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${secretFiles[@]}"
+                fi
+                files=( )
+                secretFiles=( )
+            fi
+            if [ "${newSectionName}" == "Variables" ]; then
+                if [ "${sectionName}" != "" ]; then
+                    Error  "ERROR: Variables section must be set at first section."
+                fi
+            elif [ "${newSectionName}" == "BackUp" ]; then
+                inExportParameterBlock="${True}"
+            fi
+            UnsetVariables  "${exportVariables[@]}"
+            sectionName="${newSectionName}"
+        fi
+    done
+    if [ "${workingBaseFolder}" != ""  -a  "${backUpBaseFolder}" != "" ]; then
+
+        #// Back up or restore files (2)
+        EchoBackUpPaths  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${settingFilePath}"
+        CheckNoError  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${settingFilePath}"
+        BackUpOrRestoreFiles   "${backUpOrRestore}"  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${files[@]}"
+        BackUpOrRestoreSecret  "${backUpOrRestore}"  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${secretFiles[@]}"
+    fi
+    if [ "${backUpGitWorkingFolder}" == "" ]; then
+        backUpGitWorkingFolder="${backUpBaseFolder}"
+    fi
+    if [ "${backUpOrRestore}" == "restore" ]; then
+        echo  "FilesFile:  ${settingFileFolderPath}"
+        echo  "BackUpGitWorkingFolder: ${backUpGitWorkingFolder}"
+        if [ "${branch}" != "" ]; then
+            echo  "BackUpGitBranch: ${branch}"
+        fi
+    fi
+    if [ "${thisFileInBackUp}" != ""  -a  "${backUpOrRestore}" == "backup" ]; then
+
+        #// Back up a files file
+        cp -ap  "${settingFilePath}"  "${thisFileInBackUp}"
+    fi
+    if [ "${backUpOrRestore}" == "restore"  -a  "${workingBaseFolder}" != "" ]; then
+
+        #// DeleteOtherBranchFiles
+        DeleteOtherBranchFiles  "${workingBaseFolder}"  "${filePathsBefore}"  "${filePathsAfter}"
+    fi
+    if [ "${errorCount}" != 0 ]; then
+        Error  "Error count: ${errorCount}"
+    fi
+    if [ "${branch}" != ""  -a  "${backUpOrRestore}" == "backup" ]; then
+
+        #// GitCommit
+        echo  "FilesFile:  ${settingFilePath}"
+        echo  "BackUpGitWorkingFolder: ${backUpGitWorkingFolder}"
+        echo  "BackUpGitBranch: ${branch}"
+        EditGitPushEnabledIfProtected  "${settingFilePath}"  "${branch}"  "${protectedBranches}"
+        EditGitPushEnabledIfProtected  "${thisFileInBackUp}"  "${branch}"  "${protectedBranches}"
+
+        GitCommit  "${backUpGitWorkingFolder}"  "${branch}"  "${commitMessage}"  "${gitPushEnabled}"  "${gitSSHCommand}"  "${protectedBranches}"
+    fi
+    if [ "${backUpOrRestore}" == "restore"  -a  "${callingNestLevel}" == 0 ]; then
+        echo  "Restored"
+    fi
+}
+
+function  ReadGitPathAndBranch() {
+    local  settingFilePath="$1"
+    local  settingIniFile="$( cat "${settingFilePath}" )"
+    local  settingFileFolderPath="${settingFilePath%/*}"
+    local  oldIFS="$IFS"
+    IFS=$'\n'
+    local  settingIniFileLines=( ${settingIniFile} )
+    IFS="$oldIFS"
+    local  sectionName=""
+    local  backUpGitWorkingFolder=""
+    local  backUpGitBranch=""
+
+    for  line  in "${settingIniFileLines[@]}"; do
+        local  lineType="$( ParseIniFileLineType  "${line}" )"
+        if [ "${lineType}" == "parameter" ]; then
+            local  name="$( ParseIniFileParameterName  "${line}" )"
+
+            if [ "${sectionName}" == "Variables" ]; then
+                local  value="$( ParseIniFileParameterValue  "${line}" )"
+                local  variableValue="$( EvaluateAndGetFullPath "${value}"  "${settingFileFolderPath}" )"
+                DefineVariable  "${name}"  "${variableValue}"
+            elif [ "${name}" == "BackUpGitWorkingFolder" ]; then
+                if [ "${backUpGitWorkingFolder}" != "" ]; then
+                    echo  "Error: BackUpGitWorkingFolder must be specidied 1 time"
+                fi
+                local  value="$( ParseIniFileParameterValue  "${line}" )"
+                value="$( Evaluate "${value}" )"
+                backUpGitWorkingFolder="$( EvaluateAndGetFullPath  "${value}"  "${settingFileFolderPath}" )"
+            elif [ "${name}" == "BackUpGitBranch" ]; then
+                if [ "${backUpGitBranch}" != "" ]; then
+                    echo  "Error: backUpGitBranch must be specidied 1 time"
+                fi
+                local  value="$( ParseIniFileParameterValue  "${line}" )"
+                value="$( Evaluate "${value}" )"
+                backUpGitBranch="$( EvaluateAndGetFullPath  "${value}"  "${settingFileFolderPath}" )"
+            fi
+        elif [ "${lineType}" == "section" ]; then
+            sectionName="$( ParseIniFileSectionName "${line}" )"
+        fi
+    done
+
+    echo  "${backUpGitWorkingFolder}:${backUpGitBranch}"
+}
+
+function  ReadFilePaths() {
+    local  settingFilePath="$1"
+    local  settingIniFile="$( cat "${settingFilePath}" )"
+    local  oldIFS="$IFS"
+    IFS=$'\n'
+    local  settingIniFileLines=( ${settingIniFile} )
+    IFS="$oldIFS"
+    local  workingBaseFolder=""
+
+    for  line  in "${settingIniFileLines[@]}"; do
+        local  lineType="$( ParseIniFileLineType  "${line}" )"
+        if [ "${lineType}" == "parameter" ]; then
+            local  name="$( ParseIniFileParameterName  "${line}" )"
+            local  value="$( ParseIniFileParameterValue  "${line}" )"
+
+            if [ "${name}" == "WorkingBaseFolder" ]; then
+                workingBaseFolder="$( GetFullPath  "${value}"  "${settingFilePath}/.."  --empty-if-not-exist )"
+                #// If the folder does not exist, workingBaseFolder = "" in some OS
+            elif [ "${name}" == "File"  -o  "${name}" == "SecretFile" ]; then
+                if [ "${workingBaseFolder}" != "" ]; then
+
+                    GetFullPath  "${value}"  "${workingBaseFolder}"  --empty-if-not-exist
+                    #// It is not necessary to echo a path, if the file does not exist in some OS
+                fi
+            fi
+        fi
+    done
+}
+
+function  DeleteOtherBranchFiles() {
+    local  workingBaseFolder="$1"
+    local  filePathsBefore="$2"
+    local  filePathsAfter="$3"
+    local  deletingPaths="$( NotCommonLines  "${filePathsBefore}"  "${filePathsAfter}"  "left"  ":" )"
+    local  oldIFS="$IFS"
+    IFS=$'\n'
+    local  deletingPathLines=( ${deletingPaths} )
+    IFS="$oldIFS"
+
+    for  path  in "${deletingPathLines[@]}"; do
+        if StartsWith  ${path} ${workingBaseFolder}; then
+            if [ -f "${path}" ]; then
+                rm  "${path}"
+            fi
+        fi
+    done
+}
+
+function  CheckBackUpFolder() {
+    local  backUpMarkFile="$1"
+    if [ ! -e "${backUpMarkFile}" ]; then
+        Error  "Not found ThisIsBackUp file at ${backUpMarkFile}. This script requests ThisIsBackUp that has empty or any contents."
+    fi
+}
+
+function  MakeGitWorkingInBackUpIfNew() {
+    local  backUpOrRestore="$1"
+    local  workingFolderPath="$2"
+    if [ ! -e "${workingFolderPath}/.git" ]; then
+        if [ "${backUpOrRestore}" == "backup" ]; then
+            pushd  "${workingFolderPath}"  > /dev/null  ||  Error
+
+            git init ${GitInitOption}  > /dev/null  2>&1
+            git add "."
+            git checkout -b  "${DefaultGitBranch}"
+            if [ "$( git config user.name )" == "" ]; then
+                if [ "${USER}" != "" ]; then
+                    git config --local  user.name  "${USER}"
+                else
+                    git config --local  user.name  "${USERNAME}"
+                fi
+            fi
+            if [ "$( git config user.email )" == "" ]; then
+                if [ "${USER}" != "" ]; then
+                    git config --local  user.email  "${USER}@localhost"
+                else
+                    git config --local  user.email  "${USERNAME}@localhost"
+                fi
+            fi
+            git commit -m "First commit"
+            popd  > /dev/null
+        else
+            Error  "Back up folder does not have .git folder"
+        fi
+    fi
+}
+
+function  EditGitPushEnabledIfProtected() {
+    local  settingFilePath="$1"
+    local  branch="$2"
+    local  protectedBranches="$3"
+    if [ ! -e "${settingFilePath}" ]; then
+        return
+    fi
+    if IsProtectedBranch  "${branch}" "${protectedBranches}"; then
+        SetVariableValue  "GitPush"  "false"  "${settingFilePath}"
+    fi
+}
+
+function  GitCommit() {
+    local  workingFolderPath="$1"
+    local  branch="$2"
+    local  commitMessage="$3"
+    local  gitPushEnabled="$4"
+    local  gitSSHCommand="$5"
+    local  protectedBranches="$6"
+    local  old_GIT_SSH_COMMAND="${GIT_SSH_COMMAND}"
+    if [ "${commitMessage}" == "" ]; then  commitMessage="update"  ;fi
+    if [ "${gitSSHCommand}" != "" ]; then
+        export  GIT_SSH_COMMAND="${gitSSHCommand}"
+    fi
+    AssertExist  "${workingFolderPath}/.git"
+
+    pushd  "${workingFolderPath}"  > /dev/null  ||  Error
+
+    git status --short
+    if [ "$(git status --short)" != "" ]; then
+        git add "."
+        git commit -m "${commitMessage}"
+        if [ "${gitPushEnabled}" == "${False}"  -o  "${gitPushEnabled}" == "" ]; then
+            echo  "Updated (no git push)"
+        else
+            CheckProtectedBranch  "${workingFolderPath}"  "${branch}"  "${protectedBranches}"
+
+            git push origin "${branch}"  ||  Error  "ERROR: git commit was successed, but git push failed in \"${PWD}\". Do git push manually."
+            echo  "Updated and Git Pushed"
+        fi
+    else
+        echo  "No update"
+    fi
+    popd  > /dev/null
+    GIT_SSH_COMMAND="${old_GIT_SSH_COMMAND}"
+}
+
+function  IsProtectedBranch() {
+    local  branch="$1"
+    local  protectedBranches="$2"
+    local  protectedBranches="$( echo "${protectedBranches}"  |  sed -E 's/,/ /g' )"
+    local  protectedBranchArray=( ${protectedBranches[@]} )
+
+    local  protected=""
+    for protected in "${protectedBranchArray[@]}" ;do
+        if [ "${branch}" == "${protected}" ]; then
+            return "${True}"
+        fi
+    done
+    return "${False}"
+}
+
+function  CheckProtectedBranch() {
+    local  workingFolderPath="$1"
+    local  branch="$2"
+    local  protectedBranches="$3"
+
+    IsProtectedBranch  "${branch}" "${protectedBranches}"  &&  \
+        Error  "ERROR: git commit was successed, but specified branch \"${branch}\" is protected in \"${workingFolderPath}\" by a back up setting. Do git push manually."
+}
+
+function  EchoBackUpPaths() {
+    local  workingBaseFolder="$1"
+    local  backUpBaseFolder="$2"
+    local  settingFilePath="$3"
+
+    echo  "FilesFile: ${settingFilePath}"
+    echo  "WorkingBaseFolder: ${workingBaseFolder}"
+    echo  "BackUpBaseFolder: ${backUpBaseFolder}"
+}
+
+function  CheckNoError() {
+    local  workingBaseFolder="$1"
+    local  backUpBaseFolder="$2"
+    local  settingFilePath="$3"
+
+    if [ "${workingBaseFolder}" == "${backUpBaseFolder}" ]; then
+        Error  'ERROR: "WorkingBaseFolder" and "BackUpBaseFolder" are same values in "'"${settingFilePath}\"'"
+    fi
+}
+
+function  BackUpOrRestoreFiles() {
+    local  backUpOrRestore="$1"
+    local  workingBaseFolder="$2"
+    local  backUpBaseFolder="$3"
+    #//  $4, $5, $6, ... are file relative paths
+    shift 3
+    if [ "${backUpOrRestore}" == "backup" ]; then
+        if [ "$1" != "" ]; then
+            mkdir -p  "${backUpBaseFolder}"
+        fi
+
+        CopyFiles  "${workingBaseFolder}"  "${backUpBaseFolder}"  "$@"  >  /dev/null
+    elif [ "${backUpOrRestore}" == "restore" ]; then
+        if [ "$1" != "" ]; then
+            mkdir -p  "${workingBaseFolder}"
+        fi
+
+        CopyFiles  "${backUpBaseFolder}"  "${workingBaseFolder}"  "$@"
+    else
+        Error
+    fi
+}
+
+function  CopyFiles() {
+    local  workingBaseFolder="$1"
+    local  destinationBaseFolder="$2"
+    #//  $3, $4, $5, ... are file relative paths
+    if [ "$3" == "" ]; then
+        return
+    fi
+    AssertExist  "${workingBaseFolder}"
+    AssertExist  "${destinationBaseFolder}"
+
+    until [ "$3" == "" ]; do
+        local  filePath="$3"
+        shift
+        mkdir -p "$( dirname "${destinationBaseFolder}/${filePath}" )"
+        echo  "${filePath}"
+
+        cp -fap  "${workingBaseFolder}/${filePath}"  "${destinationBaseFolder}/${filePath}"
+    done
+}
+
+function  BackUpOrRestoreSecret() {
+    local  backUpOrRestore="$1"
+    local  workingBaseFolder="$2"
+    local  backUpBaseFolder="$3"
+    #//  $4, $5, $6, ... are file relative paths
+    if [ "$4" == "" ]; then
+        return
+    fi
+    AssertExist  "${workingBaseFolder}"
+    AssertExist  "${backUpBaseFolder}"
+
+    if [ "${backUpOrRestore}" == "backup" ]; then
+
+        until [ "$4" == "" ]; do
+            local  filePath="$4"
+            shift
+            local  filePathInZip=$( GetRelativePathInZip "${filePath}" )
+            local  isUpdated="${True}"
+            if [ -e "${backUpBaseFolder}/${filePath}.hash" ]; then
+                local  backUpHash="$( cat "${backUpBaseFolder}/${filePath}.hash" )"
+                local  sourceHash="$( GetHash "${workingBaseFolder}/${filePath}" )"
+                if [ "${sourceHash}" == "${backUpHash}" ]; then
+                    isUpdated="${False}"
+                fi
+            else
+                local  sourceHash="$( GetHash "${workingBaseFolder}/${filePath}" )"
+            fi
+            if [ "${isUpdated}" == "${True}" ]; then
+                mkdir -p "$( dirname "${backUpBaseFolder}/${filePath}.zip" )"
+                CheckZipCommandInstalled
+                local  password="$(LookUpEnvironmentVariable  THIS_FILE  "${workingBaseFolder}/${filePath}")"
+                if [ "${password}" == "" ]; then
+                    echo  "ERROR: Not found \"THIS_FILE\" in \"${workingBaseFolder}/${filePath}\""  >&2
+                else
+                    pushd  "${workingBaseFolder}"  > /dev/null  ||  Error
+
+                    zip -e --password="${password}"  "${backUpBaseFolder}/${filePath}.zip"  "${filePathInZip}"  > /dev/null
+                    popd  > /dev/null
+                    echo  "${sourceHash}"  >  "${backUpBaseFolder}/${filePath}.hash"
+                fi
+            fi
+        done
+
+    elif [ "${backUpOrRestore}" == "restore" ]; then
+
+        until [ "$4" == "" ]; do
+            local  filePath="$4"
+            shift
+            local  filePathInZip=$( GetRelativePathInZip "${filePath}" )
+            if [ "${filePathInZip:0:2}" == "./" ]; then
+                filePathInZip="${filePathInZip:2}"  #// mac13 does not support "./__RelativePath__" format path.
+            fi
+            CheckZipCommandInstalled
+            local  password="$(LookUpEnvironmentVariable  THIS_FILE  "${workingBaseFolder}/${filePath}")"
+            if [ "${password}" == "" ]; then
+                echo  "ERROR: Not found \"THIS_FILE\" in \"${workingBaseFolder}/${filePath}\""  >&2
+                exit 2
+            else
+                pushd  "${workingBaseFolder}"  > /dev/null  ||  Error
+
+                unzip -o -P "${password}"  "${backUpBaseFolder}/${filePath}.zip"  "${filePathInZip}"  > /dev/null
+                popd  > /dev/null
+            fi
+        done
+    else
+        Error
+    fi
+}
+
+function  LookUpEnvironmentVariable() {  #// LookUpEnv  __VariableName__  __DotEnvFilePath__  #keyword: bashlib LookUpEnvironmentVariable source
+    cat  "$2"  |  grep "$1"' *= *'  |  sed  "s/$1"' *= *\(.*\)/\1/'
+}
+
+function  GetHash() {
+    local  filePath="$1"
+    if [ "$( uname )" == "Darwin" ]; then  #// mac
+        shasum -a 256  "${filePath}"  |  awk  '{print $1}'
+    else
+        sha256sum  "${filePath}"  |  awk  '{print $1}'
+    fi
+}
+
+function  CheckZipCommandInstalled() {
+    if [ "${ZipCommandInstalled}" == "" ]; then
+        ZipCommandInstalled="${True}"
+
+        which  zip    > /dev/null  ||  ZipCommandInstalled="${False}"
+        which  unzip  > /dev/null  ||  ZipCommandInstalled="${False}"
+    fi
+    if [ "${ZipCommandInstalled}" == "${False}" ]; then
+        echo  "In Ubuntu, install command is \"sudo apt-get install -y  zip\"."  >&2
+        echo  "In Git bash, download zip.exe and bzip2.dll and copy to C:\\Program Files\\Git\\usr\\bin."  >&2
+        echo  "    https://sourceforge.net/projects/gnuwin32/files"  >&2
+        Error  "ERROR: Not installed zip coommand."
+    fi
+}
+ZipCommandInstalled=""
+
+function  GetRelativePathInZip() {
+    echo  "$1"  |  sed  's/^\/\|\(\.\/\)\|\(\.\.\/\)//g'  #// from "/path", "./path", "../../path" to "path"
+}
+
+function  GetFullPath() {
+    local  relativePath="$1"
+    local  basePath="$2"
+    local  option="$3"
+    if [ "${option}" == "--touch" ]; then
+        if [ "${basePath}" == "" ]; then
+            mkdir -p  "${relativePath%/*}"
+            touch  "${relativePath}"  #// for next readlink
+        else
+            local  touchPath="${basePath}/${relativePath}"
+            mkdir -p  "${touchPath%/*}"
+            touch  "${basePath}/${relativePath}"  #// for next readlink
+        fi
+    fi
+
+    if [ "${basePath}" == "" ]; then
+        local  fullPath="$( readlink -f  "${relativePath}" )"
+        if [ "${fullPath}" != "" ]; then
+            echo  "${fullPath}"
+            return
+        fi
+        basePath="${PWD}"
+    fi
+    local  baseTail="${basePath: $((${#basePath}-3))}"
+    if [ "${baseTail}" == "/.." ]; then
+        basePath=${basePath%/*}
+        basePath=${basePath%/*}
+    fi
+
+    if [ "${relativePath:0:1}" != "/"  -a  "${relativePath:0:1}" != '$' ]; then
+        local  fullPath="$( readlink -f  "${basePath}/${relativePath}" )"
+    else
+        local  fullPath="${relativePath}"
+    fi
+    fullPath="$( eval echo "${fullPath}" )"  #// Evaluate variables
+    if [ "${fullPath}" == "" ]; then
+        if [ "${option}" == "--mkdir" ]; then
+            pushd  "${basePath}"  > /dev/null
+            mkdir -p  "${relativePath}"
+            popd  > /dev/null
+        elif [ "${option}" != "--empty-if-not-exist" ]; then
+            Error  "ERROR: Cannot get full path from \"${relativePath}\" in \"${basePath}\"."
+        fi
+    fi
+    echo  "${fullPath}"
+}
+
+function  EvaluateAndGetFullPath() {
+    local  relativePath="$1"
+    local  basePath="$2"
+    local  option="$3"
+
+    local  path_="$(Evaluate "${relativePath}" )"
+    if [ "${path_:0:1}" == "/" ]; then
+        echo  "${path_}"
+    elif echo "${path_}" | grep -E '[^\\]/' > /dev/null; then  #// If "path_" has slash
+        GetFullPath  "${path_}"  "${basePath}"  "${option}"
+    else
+        echo  "${path_}"
+    fi
+}
+
+function  SetVariableValue() {
+    local  key_="$1"
+    local  value="$2"
+    local  filePath="$3"
+
+    sed -i -E  's/('"${key_}"' *= *)"([^"]*)"/\1"'"${value}"'"/'  "${filePath}"
+}
+
+#// StartsWith
+#//     e.g.) if StartsWith  ${wholeString} ${partString}; then
+function  StartsWith() {
+    local  wholeString="$1"
+    local  partString="$2"
+    local  partLength=${#partString}
+
+    #// Set exit code
+    [ "${wholeString:0:${partLength}}" == "${partString}" ]
+}
+
+function  AppendToNextLine() {
+    if [ "$1" == "" ]; then
+        echo  "$2"
+    else
+        echo  "$1
+$2"
+    fi
+}
+
+function  NotCommonLines() {
+    local  leftLines="$1"
+    local  rightLines="$2"
+    local  direction="$3"
+    local  notUsedCharacter="$4"
+    rightLines="$( echo  "${rightLines}"  |  sed 's/$/:/' )"  #// Add "notUsedCharacter" to the last
+    local  merged="$( AppendToNextLine  "${leftLines}"  "${rightLines}"  |  sort )"
+    local  oldIFS="$IFS"
+    IFS=$'\n'
+    local  mergedLines=( ${merged} )
+    IFS="$oldIFS"
+    local  previousLine=""
+    if [ "${direction}" != "left" ]; then  Error  ;fi
+    if [ "${notUsedCharacter}" != ":" ]; then  Error  ;fi
+
+    for  line  in "${mergedLines[@]}"; do
+        if [ "${line}" == "" ]; then
+            NoOperation
+        elif [ "${line}" == "${previousLine}:" ]; then  #// both exists
+            #// skip
+            previousLine=""
+        elif [ "${line##*:}" == "" ]; then  #// last character is "notUsedCharacter"
+            if [ "${previousLine}" != "" ]; then
+                echo  "${previousLine}"
+            fi
+            previousLine=""
+        else
+            if [ "${previousLine}" != "" ]; then
+                echo  "${previousLine}"
+            fi
+            previousLine="${line}"
+        fi
+    done
+    if [ "${previousLine}" != "" ]; then
+        echo  "${previousLine}"
+    fi
+}
+
+function  ParseIniFileLineType() {
+    local  line="$1"
+    local  words=$( echo "${line}" | xargs )
+    local  head="${words:0:1}"
+
+    if [ "${head}" == ""  -o  "${head}" == ";"  -o  "${head}" == "#" ]; then
+        echo  "empty"
+    elif [ "${head}" == "[" ]; then
+        echo  "section"
+    else
+        echo  "parameter"
+    fi
+}
+
+function  ParseIniFileSectionName() {
+    local  line="$1"
+    echo  "${line}"  |  sed -E 's/^\[|\] *$//g'
+}
+
+function  ParseIniFileParameterName() {
+    local  line="$1"
+    echo  "${line}"  |  grep -o  '[^ ]* *='  |  sed 's/ *=$//'
+}
+
+function  ParseIniFileParameterValue() {
+    local  line="$1"
+    local  quotedValue="$( echo "${line}"  |  grep -o  '".*"' )"
+    if [ "${quotedValue}" != "" ]; then
+        echo  "${quotedValue: 1 : $(( ${#quotedValue} - 2 ))}"  #// Cut " "
+    else
+        echo  "${line}"  |  grep -o '=.*'  |  sed  's/^= *\| *$//g'
+    fi
+}
+
+function  gitInitOption() {
+    if [ "$( LessThanVersion "$(git --version)" "2.31.1")" == "${True}" ]; then
+        echo  ""
+    else
+        echo  "-bmain"  #// "-b main" occurs an error in bash debug
+    fi
+}
+
+# LessThanVersion
+#     if [ "$( LessThanVersion "$(git --version)" "2.31.1")" == "${True}" ]; then
+function  LessThanVersion() {
+    local  textContainsVersionA="$1"
+    local  textContainsVersionB="$2"
+    local  isGoodFormat="${True}"
+    echo "${textContainsVersionA}" | grep -e "[0-9]\+\.[0-9]\+\.[0-9]\+" > /dev/null  ||  isGoodFormat="${False}"
+    echo "${textContainsVersionB}" | grep -e "[0-9]\+\.[0-9]\+\.[0-9]\+" > /dev/null  ||  isGoodFormat="${False}"
+    if [ "${isGoodFormat}" == "${False}" ]; then
+        Error  "\"${textContainsVersionA}\" or \"${textContainsVersionB}\" is not semantic version."
+    fi
+
+    local  numbersA=( $( echo "${textContainsVersionA}" | grep -o -e "[0-9]\+" ) )
+    local  numbersB=( $( echo "${textContainsVersionB}" | grep -o -e "[0-9]\+" ) )
+    if [ "${numbersA[0]}" -lt "${numbersB[0]}" ]; then
+        echo "${True}"
+        return
+    elif [ "${numbersA[0]}" == "${numbersB[0]}" ]; then
+        if [ "${numbersA[1]}" -lt "${numbersB[1]}" ]; then
+            echo "${True}"
+            return
+        elif [ "${numbersA[1]}" == "${numbersB[1]}" ]; then
+            if [ "${numbersA[2]}" -lt "${numbersB[2]}" ]; then
+                echo "${True}"
+                return
+            fi
+        fi
+    fi
+    echo "${False}"
+}
+
+function  NoOperation() {
+    :
+}
+
+function  AssertExist() {
+    local  path="$1"
+
+    if [ ! -e "${path}" ]; then
+        Error  "ERROR: Not found \"${path}\""
+    fi
+}
+
+function  AssertNotExist() {
+    local  path="$1"
+
+    if [ -e "${path}" ]; then
+        Error  "ERROR: Found \"${path}\""
+    fi
+}
+
+function  CopyFolder() {
+    local  source="$1"
+    local  destination="$2"
+    local  ignoreDotGit="$3"  #// ${True}, ${False}(default)
+    local  excludeOption="--exclude=./.git"
+    source="$( CutLastOf  "${source}"  "/" )"
+    destination="$( CutLastOf  "${destination}"  "/" )"
+    if [ "${ignoreDotGit}" != ""  -a  "${ignoreDotGit}" != "${excludeOption}" ]; then
+        TestError  "Bad option: ${ignoreDotGit}"
+        return  "${False}"
+    fi
+
+    mkdir -p  "${destination}/"
+    if [ "${ignoreDotGit}" == "${excludeOption}" ]; then
+        ls -a "${source}" | grep -v  -e "^\.git$"  -e "^\.$"  -e "^\.\.$" | xargs  -I {} \
+            cp -Rap  "${source}/{}"  "${destination}/"
+    else
+        ls -a "${source}" | grep -v  -e "^\.$"  -e "^\.\.$" | xargs  -I {} \
+            cp -Rap  "${source}/{}"  "${destination}/"
+    fi
+}
+
+function  DeleteFolder() {
+    local  folderPath="$1"
+    local  retryCount=5
+
+    while true; do
+        rm -rf  "${folderPath}"
+        if [ "$?" == "${True}" ]; then
+            return
+        fi
+        retryCount="$(( ${retryCount} - 1 ))"
+        if [ "${retryCount}" == "0" ]; then
+            Error  "Cannot delete a folder \"${folderPath}\""
+        fi
+        sleep 2s
+    done
+}
+
+function  CutLastOf() {
+    local  wholeString="$1"
+    local  lastExpected="$2"
+
+    if [ "${wholeString:${#wholeString}-${#lastExpected}:${#lastExpected}}" == "${lastExpected}" ]; then
+        echo  "${wholeString:0:${#wholeString}-${#lastExpected}}"
+    else
+        echo  "${wholeString}"
+    fi
+}
+
+function  GetCommitID() {
+    local  gitWorkingFolderPath="$1"
+    pushd  "${gitWorkingFolderPath}"  > /dev/null  ||  Error
+
+    git rev-parse --short HEAD
+    popd  > /dev/null
+}
+
+function  GetCurrentGitBranch() {
+    local  gitWorkingFolderPath="$1"
+    pushd  "${gitWorkingFolderPath}"  > /dev/null  ||  Error
+
+    git rev-parse --abbrev-ref HEAD
+    popd  > /dev/null
+}
+
+function  ChangeGitBranch() {
+    local  gitWorkingFolderPath="$1"
+    local  newCurrentBranch="$2"
+    pushd  "${gitWorkingFolderPath}"  > /dev/null  ||  Error
+
+    git checkout  "${newCurrentBranch}"  2> /dev/null  ||  git checkout -b  "${newCurrentBranch}" 
+    popd  > /dev/null
+}
+
+# Evaluate
+#     Expand variables
+# Example:
+#     var1='value  1'
+#     var2='${var1}  2'
+#     evaluated="$( Evaluate "${var2}" )"  #// value  1  2
+function  Evaluate() {
+    local  expression="$1"
+    eval echo "$( eval echo '\""${expression}"\"' )"
+}
+
+function  DefineVariable() {
+    local  name="$1"
+    local  value="$2"
+    local  attribute="$3"  #// "" or "export"
+    eval "${attribute} ${name}=\"${value}\""
+}
+
+function  UnsetVariables() {
+    until [ "$1" == "" ]; do
+        unset  "$1"
+        shift
+    done
+}
+
+function  TestBackUpAndRestore() {
+    #// See ${GitWorkingFolder}/test/1_back_up_restore
+    echo  ""
+    echo  "TestBackUpAndRestore -------------------------"
+
+    #// Back up test
+        #// Set up
+        ResetBackUpTestFolder  "${GitWorkingFolder}/back_up"
+        echo  "1" > "example_project/.env_example"
+        echo  "2" > "example_project/sub_project/.env_example"
+
+        #// Main 1st back up
+        MakeGitWorkingInBackUpIfNew  backup  "${GitWorkingFolder}/back_up"
+
+        TestSub_BackUpOrRestoreFiles  backup
+        GitCommit  "${GitWorkingFolder}/back_up"
+
+        #// Check
+        diff  "back_up/.env_example"  "example_project/.env_example" > /dev/null  ||  Error  "different"
+        diff  "back_up/sub_project/.env_example"  "example_project/sub_project/.env_example" > /dev/null  ||  Error  "different"
+
+        #// Set up
+        local  firstCommitID="$( GetCommitID  "back_up" )"
+
+        #// Main 2nd back up
+        MakeGitWorkingInBackUpIfNew backup  "${GitWorkingFolder}/back_up"
+
+        TestSub_BackUpOrRestoreFiles  backup
+        GitCommit  "${GitWorkingFolder}/back_up"
+
+        #// Check
+        diff  "back_up/.env_example"  "example_project/.env_example" > /dev/null  ||  Error  "different"
+        diff  "back_up/sub_project/.env_example"  "example_project/sub_project/.env_example" > /dev/null  ||  Error  "different"
+        local  commitID="$( GetCommitID  "back_up" )"
+        if [ "${commitID}" != "${firstCommitID}" ]; then  Error  ;fi
+
+    #// Restore test
+        #// Set up
+        local  expected1="$( cat "example_project/.env_example" )"
+        local  expected2="$( cat "example_project/sub_project/.env_example" )"
+        if [ "${expected1}" == "" ]; then  Error  ;fi
+        if [ "${expected2}" == "" ]; then  Error  ;fi
+        rm  "example_project/.env_example"
+        rm  "example_project/sub_project/.env_example"
+
+        #// Main
+        MakeGitWorkingInBackUpIfNew restore  "${GitWorkingFolder}/back_up"
+
+        TestSub_BackUpOrRestoreFiles  restore  #// 1st
+        GitCommit  "${GitWorkingFolder}/back_up"
+
+        #// Check
+        local  contents1="$( cat "example_project/.env_example" )"
+        local  contents2="$( cat "example_project/sub_project/.env_example" )"
+        if [ "${contents1}" != "${expected1}" ]; then  Error  ;fi
+        if [ "${contents2}" != "${expected2}" ]; then  Error  ;fi
+
+        #// Set up
+        echo  "other contents" > "example_project/.env_example"
+        echo  "other contents" > "example_project/sub_project/.env_example"
+
+        #// Main
+        MakeGitWorkingInBackUpIfNew restore  "${GitWorkingFolder}/back_up"
+
+        TestSub_BackUpOrRestoreFiles  restore  #// 2nd
+        GitCommit  "${GitWorkingFolder}/back_up"
+
+        #// Check
+        local  contents1="$( cat "example_project/.env_example" )"
+        local  contents2="$( cat "example_project/sub_project/.env_example" )"
+        if [ "${contents1}" != "${expected1}" ]; then  Error  ;fi
+        if [ "${contents2}" != "${expected2}" ]; then  Error  ;fi
+
+    #// Back up new contents
+        #// Set up
+        echo  "other contents."  >  "example_project/.env_example"
+        echo  "other contents."  >  "example_project/sub_project/.env_example"
+
+        #// Main
+        TestSub_BackUpOrRestoreFiles  backup
+        GitCommit  "${GitWorkingFolder}/back_up"
+
+        #// Check
+        diff  "back_up/.env_example"  "example_project/.env_example" > /dev/null  ||  Error  "different"
+        diff  "back_up/sub_project/.env_example"  "example_project/sub_project/.env_example" > /dev/null  ||  Error  "different"
+        local  commitID="$( GetCommitID  "back_up" )"
+        if [ "${commitID}" == "${firstCommitID}" ]; then  Error  ;fi
+
+    #// Clean
+    ResetBackUpTestFolder  "${GitWorkingFolder}/back_up"
+}
+
+function  TestBackUpAndRestoreSecret() {
+    echo  ""
+    echo  "TestBackUpAndRestoreSecret -------------------------"
+
+    #// Back up test
+        #// Set up
+        ResetBackUpTestFolder  "${GitWorkingFolder}/back_up"
+        echo  "1s"                      >  "example_project/.env_secret_example"
+        echo  "THIS_FILE = __Secret__"  >> "example_project/.env_secret_example"
+        echo  "2s"                      >  "example_project/sub_project/.env_secret_example"
+        echo  "THIS_FILE = __Secret__"  >> "example_project/sub_project/.env_secret_example"
+        MakeGitWorkingInBackUpIfNew backup  "${GitWorkingFolder}/back_up"
+        AssertNotExist  "back_up/.env_secret_example"
+        AssertNotExist  "back_up/sub_project/.env_secret_example"
+        CopyFolder  "example_project"  "example_project_old"
+
+        #// Main 1st back up
+        TestSub_BackUpOrRestoreSecret  backup
+        GitCommit  "${GitWorkingFolder}/back_up"
+
+        #// Check
+        AssertExist  "back_up/.env_secret_example.zip"
+        AssertExist  "back_up/sub_project/.env_secret_example.zip"
+        diff  "back_up/.env_secret_example.zip"  "example_project/.env_secret_example" > /dev/null  &&  Error  "same"
+        diff  "back_up/sub_project/.env_secret_example.zip"  "example_project/sub_project/.env_secret_example" > /dev/null  &&  Error  "same"
+        diff  "example_project"  "example_project_old" > /dev/null  ||  Error  "different"
+        DeleteFolder  "example_project_old"
+
+        #// Set up
+        local  firstCommitID="$( GetCommitID  "back_up" )"
+
+        #// Main 2nd back up
+        TestSub_BackUpOrRestoreSecret  backup
+        GitCommit  "${GitWorkingFolder}/back_up"
+
+        #// Check
+        local  commitID="$( GetCommitID  "back_up" )"
+        if [ "${commitID}" != "${firstCommitID}" ]; then  Error  ;fi
+
+    #// Restore test
+        #// Set up
+        local  expected1="$( cat "example_project/.env_secret_example" )"
+        local  expected2="$( cat "example_project/sub_project/.env_secret_example" )"
+        if [ "${expected1}" == "" ]; then  Error  ;fi
+        if [ "${expected2}" == "" ]; then  Error  ;fi
+        echo  "THIS_FILE = __Secret__"  > "example_project/.env_secret_example"
+        echo  "THIS_FILE = __Secret__"  > "example_project/sub_project/.env_secret_example"
+
+        #// Main
+        TestSub_BackUpOrRestoreSecret  restore  #// 1st
+
+        #// Check
+        local  contents1="$( cat "example_project/.env_secret_example" )"
+        local  contents2="$( cat "example_project/sub_project/.env_secret_example" )"
+        if [ "${contents1}" != "${expected1}" ]; then  Error  ;fi
+        if [ "${contents2}" != "${expected2}" ]; then  Error  ;fi
+
+        #// Set up
+        echo  "other contents"          >  "example_project/.env_secret_example"
+        echo  "THIS_FILE = __Secret__"  >> "example_project/.env_secret_example"
+        echo  "other contents"          >  "example_project/sub_project/.env_secret_example"
+        echo  "THIS_FILE = __Secret__"  >> "example_project/sub_project/.env_secret_example"
+
+        #// Main
+        TestSub_BackUpOrRestoreSecret  restore  #// 2nd
+
+        #// Check
+        local  contents1="$( cat "example_project/.env_secret_example" )"
+        local  contents2="$( cat "example_project/sub_project/.env_secret_example" )"
+        if [ "${contents1}" != "${expected1}" ]; then  Error  ;fi
+        if [ "${contents2}" != "${expected2}" ]; then  Error  ;fi
+
+    #// Back up new contents
+        #// Set up
+        echo  "other contents."         >  "example_project/.env_secret_example"
+        echo  "THIS_FILE = __Secret__"  >> "example_project/.env_secret_example"
+        echo  "other contents."         >  "example_project/sub_project/.env_secret_example"
+        echo  "THIS_FILE = __Secret__"  >> "example_project/sub_project/.env_secret_example"
+
+        #// Main
+        TestSub_BackUpOrRestoreSecret  backup
+        GitCommit  "${GitWorkingFolder}/back_up"
+
+        #// Check
+        local  commitID="$( GetCommitID  "back_up" )"
+        if [ "${commitID}" == "${firstCommitID}" ]; then  Error  ;fi
+
+    #// Clean
+    ResetBackUpTestFolder  "${GitWorkingFolder}/back_up"
+}
+
+function  TestBranch() {
+    echo  ""
+    echo  "TestBranch -------------------------"
+
+    #// Set up
+    ResetBackUpTestFolder  "${GitWorkingFolder}/back_up"
+    echo  "1"                       >  "example_project/.env_example"
+    echo  "1s"                      >  "example_project/.env_secret_example"
+    echo  "THIS_FILE = __Secret__"  >> "example_project/.env_secret_example"
+    echo  "2"                       >  "example_project/sub_project/.env_example"
+    echo  "2s"                      >  "example_project/sub_project/.env_secret_example"
+    echo  "THIS_FILE = __Secret__"  >> "example_project/sub_project/.env_secret_example"
+    local  mainExpected1="$( cat "example_project/.env_example" )"
+    local  mainExpected2="$( cat "example_project/sub_project/.env_example" )"
+    local  mainSecretExpected1="$( cat "example_project/.env_secret_example" )"
+    local  mainSecretExpected2="$( cat "example_project/sub_project/.env_secret_example" )"
+
+    #// Back up to main branch
+    MakeGitWorkingInBackUpIfNew backup  "${GitWorkingFolder}/back_up"
+    ChangeGitBranch  "${GitWorkingFolder}/back_up"  "main"
+
+    TestSub_BackUpOrRestoreFiles  backup
+    TestSub_BackUpOrRestoreSecret  backup
+    GitCommit  "${GitWorkingFolder}/back_up"
+
+    #// Set up
+    echo  "s1"                      >  "example_project/.env_example"
+    echo  "s1s"                     >  "example_project/.env_secret_example"
+    echo  "THIS_FILE = __Secret__"  >> "example_project/.env_secret_example"
+    echo  "s2"                      >  "example_project/sub_project/.env_example"
+    echo  "s2s"                     >  "example_project/sub_project/.env_secret_example"
+    echo  "THIS_FILE = __Secret__"  >> "example_project/sub_project/.env_secret_example"
+    local  subExpected1="$( cat "example_project/.env_example" )"
+    local  subExpected2="$( cat "example_project/sub_project/.env_example" )"
+    local  subSecretExpected1="$( cat "example_project/.env_secret_example" )"
+    local  subSecretExpected2="$( cat "example_project/sub_project/.env_secret_example" )"
+
+    #// Back up to sub branch
+    ChangeGitBranch  "${GitWorkingFolder}/back_up"  "sub"
+
+    TestSub_BackUpOrRestoreFiles  backup
+    TestSub_BackUpOrRestoreSecret  backup
+    GitCommit  "${GitWorkingFolder}/back_up"
+
+    #// Restore from main branch
+    ChangeGitBranch  "${GitWorkingFolder}/back_up"  "main"
+
+    TestSub_BackUpOrRestoreFiles  restore
+    TestSub_BackUpOrRestoreSecret  restore
+
+    #// Check
+    local  contents1="$( cat "example_project/.env_example" )"
+    local  contents2="$( cat "example_project/sub_project/.env_example" )"
+    local  secretContents1="$( cat "example_project/.env_secret_example" )"
+    local  secretContents2="$( cat "example_project/sub_project/.env_secret_example" )"
+    if [ "${contents1}" != "${mainExpected1}" ]; then  Error  ;fi
+    if [ "${contents2}" != "${mainExpected2}" ]; then  Error  ;fi
+    if [ "${secretContents1}" != "${mainSecretExpected1}" ]; then  Error  ;fi
+    if [ "${secretContents2}" != "${mainSecretExpected2}" ]; then  Error  ;fi
+
+    #// Restore from sub branch
+    ChangeGitBranch  "${GitWorkingFolder}/back_up"  "sub"
+
+    TestSub_BackUpOrRestoreFiles  restore
+    TestSub_BackUpOrRestoreSecret  restore
+
+    #// Check
+    local  contents1="$( cat "example_project/.env_example" )"
+    local  contents2="$( cat "example_project/sub_project/.env_example" )"
+    local  secretContents1="$( cat "example_project/.env_secret_example" )"
+    local  secretContents2="$( cat "example_project/sub_project/.env_secret_example" )"
+    if [ "${contents1}" != "${subExpected1}" ]; then  Error  ;fi
+    if [ "${contents2}" != "${subExpected2}" ]; then  Error  ;fi
+    if [ "${secretContents1}" != "${subSecretExpected1}" ]; then  Error  ;fi
+    if [ "${secretContents2}" != "${subSecretExpected2}" ]; then  Error  ;fi
+
+    #// Clean
+    ResetBackUpTestFolder  "${GitWorkingFolder}/back_up"
+}
+
+function  TestBranch_Move() {
+    echo  ""
+    echo  "TestBranch_Move -------------------------"
+
+    #// Set up
+    rm -rf  "_project"
+    CopyFolder  "test/branch_move/develop"  "_project"
+    ResetBackUpTestFolder  "${GitWorkingFolder}/back_up"
+
+    #// Main
+    BackUpFiles backup  "_project/.back_up_files.ini"  "develop"
+
+    #// Set up
+    rm -rf  "_project"
+    CopyFolder  "test/branch_move/feature"  "_project"
+
+    #// Main
+    BackUpFiles backup  "_project/.back_up_files.ini"  "feature"
+
+    echo  "THIS_FILE=developPassword"  >  "_project/develop.password"
+    BackUpFiles restore  "_project/.back_up_files.ini"  "develop"
+
+    #// Check
+    AssertExist  "_project/a.txt"
+    AssertExist  "_project/develop.password"
+    AssertExist  "_project/develop.txt"
+    AssertNotExist  "_project/feature.password"
+    AssertNotExist  "_project/feature.txt"
+
+    #// Main
+    echo  "THIS_FILE=featurePassword"  >  "_project/feature.password"
+    BackUpFiles restore  "_project/.back_up_files.ini"  "feature"
+
+    #// Check
+    AssertExist  "_project/a.txt"
+    AssertExist  "_project/feature.password"
+    AssertExist  "_project/feature.txt"
+    AssertNotExist  "_project/develop.password"
+    AssertNotExist  "_project/develop.txt"
+
+    #// Clean
+    rm -rf  "_project"
+    ResetBackUpTestFolder  "${GitWorkingFolder}/back_up"
+}
+
+function  TestOtherNewProjectFolder() {
+    echo  ""
+    echo  "TestOtherNewProjectFolder -------------------------"
+
+    #// Set up
+    rm -rf  "_projectA"
+    rm -rf  "_projectB"
+
+    ResetBackUpTestFolder  "${GitWorkingFolder}/back_up"
+
+    #// Make an original commit
+    rm -rf    "_projectA"
+    mkdir -p  "_projectA"
+    echo  "${GitWorkingFolder}/back_up"
+    mkdir  "_projectA/serviceX"
+
+    cp  "test/branch_move/develop/a.txt"  "_projectA/serviceX/a.txt"
+
+    echo \
+'ThisFileInBackUp = "${GitWorkingFolder}/back_up/.back_up_files.ini"
+
+[Git]
+BackUpGitWorkingFolder = "${GitWorkingFolder}/back_up"
+
+[BackUpFiles]
+WorkingBaseFolder = "serviceX"
+BackUpBaseFolder = "${GitWorkingFolder}/back_up/serviceX"
+File = "./a.txt"
+'   > "_projectA/.back_up_files.ini"
+
+    BackUpFiles backup  "_projectA/.back_up_files.ini"  "develop"
+
+    #// Restore to new project (projectB)
+    rm -rf    "_projectB"
+    mkdir -p  "_projectB"
+
+    local  branchName="develop"
+    pushd  "back_up"  > /dev/null
+
+    git checkout  "${branchName}"
+    popd  > /dev/null
+
+    cp  "back_up/.back_up_files.ini"  "_projectB/.back_up_files.ini"
+    BackUpFiles restore  "_projectB/.back_up_files.ini"  "${branchName}"
+
+    #// Check
+    AssertExist  "_projectB/serviceX/a.txt"
+
+    #// Clean
+    rm -rf  "_projectA"
+    rm -rf  "_projectB"
+
+    ResetBackUpTestFolder  "${GitWorkingFolder}/back_up"
+}
+
+function  TestSub_BackUpOrRestoreFiles() {
+    local  backUpOrRestore="$1"
+    local  workingBaseFolder="${GitWorkingFolder}/example_project"
+    local  backUpBaseFolder="${GitWorkingFolder}/back_up"
+    local  files=( \
+        "./.env_example" \
+        "./sub_project/.env_example" \
+    )
+
+    BackUpOrRestoreFiles  "${backUpOrRestore}"  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${files[@]}"
+}
+
+function  TestSub_BackUpOrRestoreSecret() {
+    local  backUpOrRestore="$1"
+    local  workingBaseFolder="${GitWorkingFolder}/example_project"
+    local  backUpBaseFolder="${GitWorkingFolder}/back_up"
+    local  files=( \
+        "./.env_secret_example" \
+        "./sub_project/.env_secret_example" \
+    )
+
+    BackUpOrRestoreSecret  "${backUpOrRestore}"  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${files[@]}"
+}
+
+function  ResetBackUpTestFolder() {
+    local  folder="$1"
+    pushd  "${GitWorkingFolder}"  > /dev/null
+
+    rm -rf  "${folder}"
+    mkdir   "${folder}"
+    touch  "${folder}/ThisIsBackUp"
+    popd  > /dev/null
+}
+
+function  TestAll() {
+    TestBackUpAndRestore
+    TestBackUpAndRestoreSecret
+    TestBranch
+    TestBranch_Move
+    TestOtherNewProjectFolder
+    echo  "Pass"
+}
+
+#// pp "$config"
+#// pp "$config" config
+#// pp "$array" array  ${#array[@]}  "${array[@]}"
+#// pp "123"
+#// $( pp "$config" >&2 )
+function  pp() {
+    local  value="$1"
+    local  variableName="$2"
+    if [ "${variableName}" != "" ]; then  variableName=" ${variableName} "  ;fi  #// Add spaces
+    local  oldIFS="$IFS"
+    IFS=$'\n'
+    local  valueLines=( ${value} )
+    IFS="$oldIFS"
+
+    local  type=""
+    if [ "${variableName}" != "" ]; then
+        if [[ "$(declare -p ${variableName} 2>&1 )" =~ "declare -a" ]]; then
+            local  type="array"
+        fi
+    fi
+    if [ "${type}" == "" ]; then
+        if [ "${#valueLines[@]}" == 1  -o  "${#valueLines[@]}" == 0 ]; then
+            local  type="oneLine"
+        else
+            local  type="multiLine"
+        fi
+    fi
+
+    if [[ "${type}" == "oneLine" ]]; then
+        echo  "@@@${variableName}= \"${value}\" ---------------------------"  >&2
+    elif [[ "${type}" == "multiLine" ]]; then
+        echo  "@@@${variableName}---------------------------"  >&2
+        echo  "\"${value}\"" >&2
+    elif [[ "${type}" == "array" ]]; then
+        echo  "@@@${variableName}---------------------------"  >&2
+        local  count="$3"
+        if [ "${count}" == "" ]; then
+            echo  "[0]: \"$4\""  >&2
+            echo  "[1]: ERROR: pp parameter is too few"  >&2
+        else
+            local  i="0"
+            for (( i = 0; i < ${count}; i += 1 ));do
+                echo  "[$i]: \"$4\""  >&2
+                shift
+            done
+        fi
+    else
+        echo  "@@@${variableName}? ---------------------------"  >&2
+    fi
+}
+
+# ExitIfMatched
+#     Check exit code and return code in $( )
+# Example:
+#     local  out="$(x="$( command )" && echo "$x" || echo "(ERROR:$?)" )"
+#     ExitIfMatched  "${out}"  '^\(ERROR:([0-9]*)\)$'
+function  ExitIfMatched() {
+    local  output="$1"
+    local  regularExpression="$2"
+
+    if [[ "${output}" =~ ${regularExpression} ]]; then
+        local  exitCode="$( echo "${output}"  |  sed -E  's/'"${regularExpression}"'/\1/')"
+        exit  "${exitCode}"
+    fi
+}
+
+function  Error() {
+    local  errorMessage="$1"
+    local  exitCode="$2"
+    if [ "${errorMessage}" == "" ]; then
+        errorMessage="ERROR"
+    fi
+    if [ "${exitCode}" == "" ]; then  exitCode=2  ;fi
+
+    echo  "${errorMessage}" >&2
+    exit  "${exitCode}"
+}
+
+if [ "${Arguments_Test}" != '' ]; then
+    GitWorkingFolder="${PWD}"  #// This project folder path.  User does not use this variable.
+fi
+True=0
+False=1
+GitInitOption=$(gitInitOption) 
+
+if [ "${Arguments_Test}" != '' ]; then
+    TestAll
+else
+    Main  "$@"
+fi

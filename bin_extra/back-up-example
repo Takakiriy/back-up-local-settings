@@ -1,0 +1,19 @@
+#!/bin/bash
+
+#// back-up-example
+#//     A customized back-up-files commands
+#// Operation:
+#//     This script calls back-up-files commands.
+#//     This file can be customized.
+#// Command:
+#//     - back-up-example
+#//     - back-up-example  -r   #// or --restore
+#// Secret file must define the following variables.
+#//     - THIS_FILE = __Password__   #// A password of zip file. Do not write first hyphen in the secret file
+if echo "$0" | grep -E -v "bash-debug|systemd" > /dev/null; then  cd "${0%/*}"  ;fi  # cd this file folder
+GitWorkingFolder="$( readlink -f "${PWD}/.." )"
+
+export  ExampleProject="${GitWorkingFolder}/example_project"
+export  ExampleProjectBackUp="${GitWorkingFolder}/back_up"
+export  FilesFileInBackUp="${GitWorkingFolder}/back_up/.back_up_files.ini"
+../bin/back-up-files  "../example_project/.back_up_files.ini"  "$@"

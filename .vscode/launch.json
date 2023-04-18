@@ -1,0 +1,50 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Application Script",
+            "type": "bashdb",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/back-up-local-settings",
+            "cwd": "${workspaceFolder}",
+            "args": [],
+            "env": {
+            }
+        },{
+            "name": "Library Direct Application",
+            "type": "bashdb",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/back-up-files",
+            "cwd": "${workspaceFolder}",
+            "args": ["${workspaceFolder}/bin/back-up-local-settings.ini"],
+            "env": {
+            }
+        },{
+            "name": "Test library",
+            "type": "bashdb",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/back-up-files",
+            "cwd": "${workspaceFolder}",
+            "args": ["--test"]
+        },{
+            "name": "Test application",
+            "type": "bashdb",
+            "request": "launch",
+            "program": "${workspaceFolder}/test/test.sh",
+            "cwd": "${workspaceFolder}/test",
+            "args": []
+        },{
+            "name": "Test sub",
+            "type": "bashdb",
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/back-up-files",
+            "cwd": "${workspaceFolder}",  // Edit this
+            "args": ["test/3_git_push/.back_up_files.ini"],  // Edit this
+            "env": {  // Edit this
+                "ExampleProject": "${workspaceFolder}/example_project",
+                "ExampleProjectBackUp": "${workspaceFolder}/back_up",
+                "FilesFileInBackUp": "${workspaceFolder}/back_up/.back_up_files.ini"
+            }
+        }
+    ]
+}
