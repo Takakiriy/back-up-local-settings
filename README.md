@@ -4,6 +4,8 @@
 ( [Japanese](./README-jp.md) )
 
 The `back-up-local-settings` command is to back up and restore `.gitignore` files and other files.
+The backup destination can be the **Git's working directory**,
+and a commit will be added when the backup is performed.
 You can specify the path of each file to back up.
 Also, you can encrypt before back up.
 
@@ -89,6 +91,8 @@ from the configuration file or backup management file.
 
 If you write Git settings in the configuration file,
 back up command will also do `git commit`.
+If `GitPush = "true"`, also do `git push`.
+If `BackUpGitWorkingFolder` is not set, `git` commands will not be executed.
 
 Example of minimum configuration file:
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-if echo "$0" | grep -E -v "bash-debug|systemd" > /dev/null; then  cd "${0%/*}"  ;fi  # cd this file folder
+if echo "$0" | grep "/" | grep -E -v "bash-debug|systemd" > /dev/null; then  cd "${0%/*}"  ;fi  # cd this file folder
 GitWorkingFolder="$( readlink -f "${PWD}/.." )"
 Bin="${GitWorkingFolder}/bin"
 BinEx="${GitWorkingFolder}/bin_extra"

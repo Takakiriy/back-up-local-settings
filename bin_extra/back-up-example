@@ -10,7 +10,7 @@
 #//     - back-up-example  -r   #// or --restore
 #// Secret file must define the following variables.
 #//     - THIS_FILE = __Password__   #// A password of zip file. Do not write first hyphen in the secret file
-if echo "$0" | grep -E -v "bash-debug|systemd" > /dev/null; then  cd "${0%/*}"  ;fi  # cd this file folder
+if echo "$0" | grep "/" | grep -E -v "bash-debug|systemd" > /dev/null; then  cd "${0%/*}"  ;fi  # cd this file folder
 GitWorkingFolder="$( readlink -f "${PWD}/.." )"
 
 export  ExampleProject="${GitWorkingFolder}/example_project"
