@@ -95,7 +95,7 @@
 - `BackUpGitWorkingFolder` と `BackUpGitBranch` の設定が無ければ `git` のコマンドは実行されません。
 - リストアするときは `git` のコマンドは実行されません。
 - `GitPush = "true"` なら、内部で `git push` コマンドも実行します。
-- `BrebaseMainBranch` を設定すると、[brebase push コマンド にも対応](#brebase対応)します。
+- `BrebaseMainBranch` を設定すると、[brebase push コマンド にも対応](#brebase-対応)します。
 - Git ワーキング フォルダー が clean 状態ではないときはエラーになりバックアップは行われません。手動で clean 状態に戻してください。
 
 設定ファイルの最低限のサンプル:
@@ -161,7 +161,7 @@ https://github.com/Takakiriy/brebase
     $ git push origin "my-feature"  #// in back-up-files command
 
 もし、メイン フィーチャー ブランチ が先行していたら、
-サブ フィーチャー ブランチの `git commit` まで実行しますが、
+バックアップと サブ フィーチャー ブランチの `git commit` まで実行しますが、
 メイン フィーチャー ブランチ は更新されず、
 更新されなかったと警告されます。
 `--pull` オプションを使ってマージしてください。

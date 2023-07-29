@@ -163,7 +163,7 @@ and `git push` main feature branch.
     $ git push origin "my-feature"  #// in back-up-files command
 
 If main feature branch is ahead (sub feature branch is behind),
-it runs `git commit` sub feature branch
+it backs up and runs `git commit` sub feature branch
 but the main feature branch will not be updated
 and will warn you that it was not updated.
 Please, merge using the `--pull` option.
