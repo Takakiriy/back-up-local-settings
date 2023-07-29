@@ -1,0 +1,163 @@
+#!/bin/bash
+
+# brebase command
+#    Supports rebase git merge strategy in local multi branch
+
+BREBASE_MAIN_BRANCH="${BREBASE_MAIN_BRANCH}"
+
+PositionalArgs=()
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        push)    Options_Push="yes";  shift;;
+        pull)    Options_Pull="yes";  shift;;
+        status)  Options_Status="yes";  shift;;
+        -*) echo "Unknown option $1"; exit 1;;
+        *) PositionalArgs+=("$1"); shift;;
+    esac
+done
+set -- "${PositionalArgs[@]}"  #// set $1, $2, ...
+
+function  Main() {
+    if [ "${Options_Push}" != "" ]; then
+        BrebasePush  "$@"
+    fi
+    if [ "${Options_Pull}" != "" ]; then
+        BrebasePull  "$@"
+    fi
+    if [ "${Options_Status}" != "" ]; then
+        BrebaseStatus  "$@"
+    fi
+}
+
+function  BrebasePush() {
+    local  mainBranch="$1"
+    if [ "$(git status --short)" != "" ]; then
+        echo  "ERROR: Git working is not clean status"  >&2
+        exit  2
+    fi
+    mainBranch="$(x="$( FillMainBranchIfNot "${mainBranch}" )" && echo "$x" || echo "(ERROR:$?)" )"
+    ExitIfMatched  "${mainBranch}"  '^\(ERROR:([0-9]*)\)$'
+    echo  "Merge to main feature branch: ${BREBASE_MAIN_BRANCH}"
+    local  currentBranch="$( GetCurrentGitBranch )"
+    if [ "${currentBranch}" == "${mainBranch}" ]; then
+        return
+    fi
+    local  mainNewestCommitID="$(x="$( GetCommitID  "."  "${mainBranch}" )" && echo "$x" || echo "(ERROR:$?)" )"
+    ExitIfMatched  "${mainNewestCommitID}"  '^\(ERROR:([0-9]*)\)$'
+
+    if HasCommitID  "${mainNewestCommitID}"  "${currentBranch}"; then
+        git checkout  "${mainBranch}"  > /dev/null  2>&1  ||  Error  "ERROR: git checkout  \"${mainBranch}\" in \"${PWD}\"."
+
+        git merge  "${currentBranch}"  --no-edit
+        git checkout  "${currentBranch}"  > /dev/null  2>&1  ||  Error
+    else
+        echo  "WARNING: brebase push did not merge from \"${currentBranch}\" to \"${mainBranch}\", because \"${currentBranch}\" is behind \"${mainBranch}\"."  >&2
+    fi
+}
+
+function  BrebasePull() {
+    local  mainBranch="$1"
+    if [ "$(git status --short)" != "" ]; then
+        echo  "ERROR: Git working is not clean status"  >&2
+        exit  2
+    fi
+    mainBranch="$(x="$( FillMainBranchIfNot "${mainBranch}" )" && echo "$x" || echo "(ERROR:$?)" )"
+    ExitIfMatched  "${mainBranch}"  '^\(ERROR:([0-9]*)\)$'
+    echo  "Rebase from main feature branch: ${BREBASE_MAIN_BRANCH}"
+
+    echo  ""
+    echo  "$ git rebase \"${mainBranch}\""
+    git rebase "${mainBranch}"  ||  exit $?  #// Current branch base is moved
+}
+
+function  BrebaseStatus() {
+    local  mainBranch="$1"
+    mainBranch="$(x="$( FillMainBranchIfNot "${mainBranch}" )" && echo "$x" || echo "(ERROR:$?)" )"
+    ExitIfMatched  "${mainBranch}"  '^\(ERROR:([0-9]*)\)$'
+    if [ "$(git status --short)" != "" ]; then
+        echo  "$ git status"
+
+        git status
+    fi
+    local  mainCommitID="$( GetCommitID  "."  "${mainBranch}" )"
+    local  currentBranch="$( GetCurrentGitBranch )"
+    if HasCommitID  "${mainCommitID}"  "${currentBranch}"; then
+        local  currentCommitID="$( GetCommitID  "."  "${currentBranch}" )"
+        if [ "${currentCommitID}" != "${mainCommitID}" ]; then
+
+            echo  "Your branch is ahead of '${mainBranch}'. Hint: run \"brebase push\" command."
+        fi
+    else
+
+        echo  "WARNING: Your branch is behind '${mainBranch}'. Hint: run \"brebase pull\" and \"brebase push\" command."
+    fi
+}
+
+function  FillMainBranchIfNot() {
+    local  mainBranch="$1"
+    if [ "${mainBranch}" == "" ]; then
+        if [ "${BREBASE_MAIN_BRANCH}" == "" ]; then
+            Error  "ERROR: Not defined BREBASE_MAIN_BRANCH. Set BREBASE_MAIN_BRANCH environment variable and redo brebase command."
+        fi
+
+        mainBranch="${BREBASE_MAIN_BRANCH}"
+    fi
+    echo  "${mainBranch}"
+}
+
+function  GetCurrentGitBranch() {
+    git rev-parse --abbrev-ref HEAD
+}
+
+function  GetCommitID() {
+    local  gitWorkingFolderPath="$1"
+    local  branch="$2"
+    if [ "${branch}" == "" ]; then
+        branch="HEAD"
+    fi
+    if [ "${gitWorkingFolderPath}" == "" ]; then
+        gitWorkingFolderPath="."
+    fi
+    pushd  "${gitWorkingFolderPath}"  > /dev/null  ||  Error
+
+    git rev-parse --short "${branch}"  2> /dev/null  ||  Error  "ERROR: Not found \"${branch}\" git branch in \"${PWD}\"."
+    popd  > /dev/null
+}
+
+function  HasCommitID() {
+    #// If current branch has whole of main branch, current branch is same or ahead of ${mainBranch}.
+    local  mainNewestCommitID="$1"
+    local  currentBranch="$2"
+
+    #// Set exit code
+    git merge-base --is-ancestor  "${mainNewestCommitID}"  "${currentBranch}"
+}
+
+# ExitIfMatched
+#     Check exit code and return code in $( )
+# Example:
+#     local  out="$(x="$( command )" && echo "$x" || echo "(ERROR:$?)" )"
+#     ExitIfMatched  "${out}"  '^\(ERROR:([0-9]*)\)$'
+function  ExitIfMatched() {
+    local  output="$1"
+    local  regularExpression="$2"
+
+    if [[ "${output}" =~ ${regularExpression} ]]; then
+        local  exitCode="$( echo "${output}"  |  sed -E  's/'"${regularExpression}"'/\1/')"
+        exit  "${exitCode}"
+    fi
+}
+
+function  Error() {
+    local  errorMessage="$1"
+    local  exitCode="$2"
+    if [ "${errorMessage}" == "" ]; then
+        errorMessage="ERROR"
+    fi
+    if [ "${exitCode}" == "" ]; then  exitCode=2  ;fi
+
+    echo  "${errorMessage}" >&2
+    exit  "${exitCode}"
+}
+
+Main  "$@"

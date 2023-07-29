@@ -13,6 +13,7 @@ function  Main() {
     TestExampleProjectScriptSimple
     TestExampleProjectScriptParentIni
     TestGitPush
+    TestBrebase
     TestMultiIni
     TestNestedMkdir
     TestSameFolderError
@@ -22,7 +23,7 @@ function  Main() {
 
 function  Test1Direct() {
     echo  ""
-    echo  "Test1Direct -------------------------"
+    echo  "### Test1Direct --------------------------------"
     test1Sub  "Test1Direct"
 }
 
@@ -40,15 +41,15 @@ function  TestExampleProjectScriptParentIni() {
 
 function  TestGitPush() {
     echo  ""
-    echo  "TestGitPush -------------------------"
+    echo  "### TestGitPush --------------------------------"
     cd  "${GitWorkingFolder}"
 
     #// Set up
-        #// Make new reposisoty
+        #// Make new reposisoty in "${GitWorkingFolder}/_repository.git"
         rm -rf  "${GitWorkingFolder}/_repository.git"
         git init --bare --shared=true  "${GitWorkingFolder}/_repository.git"
 
-        #// Make a Git working
+        #// Make a Git working in "${GitWorkingFolder}/back_up"
         ResetBackUpTestFolder  "${GitWorkingFolder}/back_up"
         cd  "${GitWorkingFolder}/back_up"
         git checkout  -b "feature"
@@ -63,9 +64,10 @@ function  TestGitPush() {
         SetVariableValue  "BackUpGitBranch"  "feature"  "test/3_git_push/.back_up_files.ini"
         SetVariableValue  "GitPush"          "true"     "test/3_git_push/.back_up_files.ini"
 
-    #// Git push
-        #// Main
+    #// Back up and Git push
+        #// Main. Back up from "${GitWorkingFolder}/test/3_git_push"
         cd  "${GitWorkingFolder}"
+        echo  '$ back-up-files  "test/3_git_push/.back_up_files.ini"'
 
         ${Bin}/back-up-files  "test/3_git_push/.back_up_files.ini"  ||  Error
 
@@ -73,6 +75,14 @@ function  TestGitPush() {
         cd  "${GitWorkingFolder}/back_up"
         local  currentCommitID="$( git rev-parse --short "feature" )"
         if [ "${currentCommitID}" == "${oldCommitID}" ]; then  Error  ;fi
+
+    #// Check clean status in Git working
+        echo  "editing"  >  "${GitWorkingFolder}/back_up/a"
+        cd  "${GitWorkingFolder}"
+        echo  '$ back-up-files  "test/3_git_push/.back_up_files.ini"'
+
+        ${Bin}/back-up-files  "test/3_git_push/.back_up_files.ini"  &&  Error
+        cp  "${GitWorkingFolder}/test/3_git_push/a"  "${GitWorkingFolder}/back_up/a"
 
     #// ProtectedBranches
         #// Set up
@@ -86,6 +96,7 @@ function  TestGitPush() {
 
         #// Main
         cd  "${GitWorkingFolder}"
+        echo  '$ back-up-files  "test/3_git_push/.back_up_files.ini"'
 
         ${Bin}/back-up-files  "test/3_git_push/.back_up_files.ini"  &&  Error
 
@@ -100,6 +111,17 @@ function  TestGitPush() {
         cd  "${GitWorkingFolder}"
         cat "test/3_git_push/.back_up_files.ini" | grep -E 'GitPush = \"false\"' > /dev/null  ||  Error  "ERROR: GitPush must be false"
 
+    #// Test of not clean status error
+        #// Set up
+        echo  "dirty"  >  "${GitWorkingFolder}/back_up/git push test"
+
+        #// Main
+        cd  "${GitWorkingFolder}"
+        echo  '$ back-up-files  "test/3_git_push/.back_up_files.ini"'
+
+        ${Bin}/back-up-files  "test/3_git_push/.back_up_files.ini"  &&  Error
+        AssertContents  "${GitWorkingFolder}/back_up/git push test"  "dirty"
+
     #// Clean
     cd  "${GitWorkingFolder}"
     SetVariableValue  "BackUpGitBranch"  "feature"  "test/3_git_push/.back_up_files.ini"
@@ -108,11 +130,173 @@ function  TestGitPush() {
     ResetBackUpTestFolder  "${GitWorkingFolder}/back_up"
 }
 
+function  TestBrebase() {
+    echo  ""
+    echo  "### TestBrebase --------------------------------"
+    cd  "${GitWorkingFolder}"
+
+    #// Set up
+        #// Make new reposisoty in "${GitWorkingFolder}/_repository.git"
+        rm -rf  "${GitWorkingFolder}/_repository.git"
+        git init --bare --shared=true  "${GitWorkingFolder}/_repository.git"
+
+        #// Make a Git working in "${GitWorkingFolder}/back_up"
+        local  firstBranchName="my-feature"  #// as brebase main feature branch
+        ResetBackUpTestFolder  "${GitWorkingFolder}/back_up"
+        echo  "brebase"  >  "${GitWorkingFolder}/test/brebase/a.txt"
+        cd  "${GitWorkingFolder}/back_up"
+        git checkout  -b "${firstBranchName}"
+        git add  "."
+        git commit -m "First commit"
+        git remote add origin  file://${GitWorkingFolder}/_repository.git
+        git push --set-upstream origin  "${firstBranchName}"
+        local  oldCommitID="$( git rev-parse --short "${firstBranchName}" )"
+
+    #// Back up and Git push
+        #// Main. Back up from "${GitWorkingFolder}/test/brebase"
+        cd  "${GitWorkingFolder}"
+        echo  "brebase"  >  "${GitWorkingFolder}/test/brebase/a.txt"
+        echo  ""
+        echo  "## Back up and Git push"
+        echo  '$ back-up-files  "test/brebase/.back_up_files.ini"  #// by test'
+
+        PATH="${PWD}/bin:${PATH}" \
+            ${Bin}/back-up-files  "test/brebase/.back_up_files.ini"  ||  Error
+        cd  "${GitWorkingFolder}/back_up"
+        local  mainFeatureBranch="${firstBranchName}"
+        local  subFeatureBranch="my-feature-1"
+        local  currentMainFeatureCommitID="$( git rev-parse --short "${mainFeatureBranch}" )"
+        test  "${currentMainFeatureCommitID}" != "${oldCommitID}"  ||  Error
+        $assert  git branch -r  |  grep "${subFeatureBranch}" > /dev/null  &&  Error  #// subFeatureBranch is not run "git push" command
+
+    #// Edit and back up and Git push
+        cd  "${GitWorkingFolder}"
+        echo  "Updated"  >  "${GitWorkingFolder}/test/brebase/a.txt"
+        echo  ""
+        echo  "## Edit and back up and Git push"
+        echo  '$ back-up-files  "test/brebase/.back_up_files.ini"  #// by test'
+        cd  "${GitWorkingFolder}/back_up"
+        local  oldMainFeatureCommitID="$( git rev-parse --short "${mainFeatureBranch}" )"
+        local  oldSubFeatureCommitID="$( git rev-parse --short "${subFeatureBranch}" )"
+        cd  "${GitWorkingFolder}"
+
+        PATH="${PWD}/bin:${PATH}" \
+            ${Bin}/back-up-files  "test/brebase/.back_up_files.ini"  ||  Error
+        cd  "${GitWorkingFolder}/back_up"
+        local  currentMainFeatureCommitID="$( git rev-parse --short "${mainFeatureBranch}" )"
+        local  currentSubFeatureCommitID="$( git rev-parse --short "${subFeatureBranch}" )"
+        test  "${currentMainFeatureCommitID}" != "${oldMainFeatureCommitID}"  ||  Error
+        test  "${currentSubFeatureCommitID}" != "${oldSubFeatureCommitID}"  ||  Error
+        $assert  git branch -r  |  grep "${subFeatureBranch}" > /dev/null  &&  Error  #// subFeatureBranch is not run "git push" command
+
+    #// Back up and run Git commit but behind from main feature breanch
+        echo  ""
+        echo  "## Back up and Git push but behind from main feature breanch"
+        echo  "Edit a.txt in \"${firstBranchName}\" branch"
+        cd  "${GitWorkingFolder}/back_up"
+        git checkout "${mainFeatureBranch}"
+        echo  "Updated by theirs"  >  "a.txt"
+        echo  "$ git push  \"${firstBranchName}\"  #// by test"
+        git add  "."
+        git commit -m "Updated by theirs"
+        git push
+        cd  "${GitWorkingFolder}/back_up"
+        local  oldMainFeatureCommitID="$( git rev-parse --short "${mainFeatureBranch}" )"
+        local  oldSubFeatureCommitID="$( git rev-parse --short "${subFeatureBranch}" )"
+        cd  "${GitWorkingFolder}"
+        echo  "Updated by ours"  >  "${GitWorkingFolder}/test/brebase/a.txt"
+        echo  ""
+        echo  '$ back-up-files  "test/brebase/.back_up_files.ini"  #// by test'
+
+        PATH="${PWD}/bin:${PATH}" \
+            ${Bin}/back-up-files  "test/brebase/.back_up_files.ini"  &&  Error
+        cd  "${GitWorkingFolder}/back_up"
+        local  currentMainFeatureCommitID="$( git rev-parse --short "${mainFeatureBranch}" )"
+        local  currentSubFeatureCommitID="$( git rev-parse --short "${subFeatureBranch}" )"
+        cd  "${GitWorkingFolder}"
+        test  "${currentMainFeatureCommitID}" == "${oldMainFeatureCommitID}"  ||  Error
+        test  "${currentSubFeatureCommitID}" != "${oldSubFeatureCommitID}"  ||  Error
+
+    #// back-up-file --pull command. Conflict case
+        echo  ""
+        echo  "## back-up-file --pull command. Conflict case"
+        echo  '$ back-up-files --pull  "test/brebase/.back_up_files.ini"  #// by test'
+
+        PATH="${PWD}/bin:${PATH}" \
+            ${Bin}/back-up-files --pull  "test/brebase/.back_up_files.ini"  &&  Error
+        cd  "${GitWorkingFolder}/back_up"
+        $assert  git status  |  grep  "rebase in progress" > /dev/null  &&  Error  #// Not rebase in progress
+        $assert  git status  |  grep  "clean" > /dev/null  ||  Error
+        local  conflictText='<<<<<<< HEAD\nUpdated by theirs\n=======\nUpdated by ours\n>>>>>>> updated\n'
+        AssertContents  "a.txt"  "${conflictText}"
+        cd  "${GitWorkingFolder}"
+        AssertContents  "${GitWorkingFolder}/test/brebase/a.txt"  "${conflictText}"
+
+    #// Back up and Git push merged files
+        echo  ""
+        echo  "## Back up and Git push merged files"
+        echo  '$ back-up-files  "test/brebase/.back_up_files.ini"  #// by test'
+        echo  "brebase"  >  "${GitWorkingFolder}/test/brebase/a.txt"
+        cd  "${GitWorkingFolder}/back_up"
+        local  oldMainFeatureCommitID="$( git rev-parse --short "${mainFeatureBranch}" )"
+        local  oldSubFeatureCommitID="$( git rev-parse --short "${subFeatureBranch}" )"
+        cd  "${GitWorkingFolder}"
+
+        PATH="${PWD}/bin:${PATH}" \
+            ${Bin}/back-up-files  "test/brebase/.back_up_files.ini"  ||  Error
+        cd  "${GitWorkingFolder}/back_up"
+        local  currentMainFeatureCommitID="$( git rev-parse --short "${mainFeatureBranch}" )"
+        local  currentSubFeatureCommitID="$( git rev-parse --short "${subFeatureBranch}" )"
+        cd  "${GitWorkingFolder}"
+        test  "${currentMainFeatureCommitID}" != "${oldMainFeatureCommitID}"  ||  Error
+        test  "${currentSubFeatureCommitID}" != "${oldSubFeatureCommitID}"  ||  Error
+
+    #// back-up-file --pull command. Changed in theirs case
+        echo  ""
+        echo  "## back-up-file --pull command. Changed in theirs case"
+        echo  "$ git push  \"${mainFeatureBranch}\""
+        cd  "${GitWorkingFolder}/back_up"
+        git checkout "${mainFeatureBranch}"
+        echo  "Changed in theirs"  >  "a.txt"
+        git add  "."
+        git commit -m "Changed in theirs"
+        git push
+        cd  "${GitWorkingFolder}"
+
+        echo  ""
+        echo  '$ back-up-files --pull  "test/brebase/.back_up_files.ini"  #// by test'
+        PATH="${PWD}/bin:${PATH}" \
+            ${Bin}/back-up-files --pull  "test/brebase/.back_up_files.ini"  ||  Error
+        cd  "${GitWorkingFolder}/back_up"
+        $assert  git status  |  grep  "rebase in progress" > /dev/null  &&  Error
+        $assert  git status  |  grep  "clean" > /dev/null  ||  Error
+        cd  "${GitWorkingFolder}"
+        AssertContents  "${GitWorkingFolder}/test/brebase/a.txt"  "Changed in theirs"
+
+    #// back-up-file --pull command. Changed in ours (not clean) case
+        echo  ""
+        echo  "## back-up-file --pull command. Changed in ours (not clean) case"
+        echo  "brebase"  > "${GitWorkingFolder}/test/brebase/a.txt"
+
+        echo  ""
+        cd  "${GitWorkingFolder}"
+        echo  '$ back-up-files --pull  "test/brebase/.back_up_files.ini"  #// by test'
+
+        PATH="${PWD}/bin:${PATH}" \
+            ${Bin}/back-up-files --pull  "test/brebase/.back_up_files.ini"  &&  Error
+        AssertContents  "${GitWorkingFolder}/test/brebase/a.txt"  "brebase"
+
+    #// Clean
+    echo  "brebase"  >  "${GitWorkingFolder}/test/brebase/a.txt"
+    rm -rf  "${GitWorkingFolder}/_repository.git"
+    ResetBackUpTestFolder  "${GitWorkingFolder}/back_up"
+}
+
 function  TestMultiIni() {
     echo  ""
-    echo  "TestMultiIni -------------------------"
+    echo  "### TestMultiIni --------------------------------"
     cd  "${GitWorkingFolder}"
-    ResetBackUpTestFolder  "./back_up"
+    ResetBackUpTestFolder  "./back_up"  "project-Z"
     rm -rf  "_work"
     mkdir   "_work"
     cp -ap  "test/project-X/"  "_work/project-X/"
@@ -211,7 +395,7 @@ function  test1Sub() {
 function  testExampleProjectSub() {
     local  testCase="$1"
     echo  ""
-    echo  "${testCase} -------------------------"
+    echo  "### ${testCase} --------------------------------"
     cd  "${GitWorkingFolder}"
     ResetBackUpTestFolder  "./back_up"
     rm -rf  "_work"
@@ -334,7 +518,7 @@ function  testExampleProjectSub() {
 
 function  TestNestedMkdir() {
     echo  ""
-    echo  "TestNestedMkdir -------------------------"
+    echo  "### TestNestedMkdir --------------------------------"
     cd  "${GitWorkingFolder}/test"
 
     #// Back up
@@ -371,7 +555,7 @@ function  TestNestedMkdir() {
 
 function  TestSameFolderError() {
     echo  ""
-    echo  "TestSameFolderError -------------------------"
+    echo  "### TestSameFolderError --------------------------------"
     cd  "${GitWorkingFolder}/test"
     rm -rf  "./error/same_back_up_folder/back_up"
 
@@ -391,15 +575,21 @@ function  TestSameFolderError() {
 
 function  ResetBackUpTestFolder() {
     local  folder="$1"
+    local  gitIgnoreContents="$2"
     pushd  "${GitWorkingFolder}"  > /dev/null
 
     rm -rf  "${folder}"
     mkdir   "${folder}"
     touch  "${folder}/ThisIsBackUp"
+    if [ "${gitIgnoreContents}" != "" ]; then
+        echo  "${gitIgnoreContents}"  >  "${folder}/.gitignore"
+    fi
     cd  "${folder}"
     git init
     git config --local user.email "you@example.com"
     git config --local user.name "Your Name"
+    git add  "."
+    git commit -m "First commit"
     popd  > /dev/null
 }
 
@@ -432,6 +622,16 @@ function  AssertNotExist() {
 
     if [ -e "${path}" ]; then
         Error  "Found \"${path}\""
+    fi
+}
+
+function  AssertContents() {
+    local  filePath="$1"
+    local  expectedContents="$2"
+
+    local  result="$(cat "${filePath}")"
+    if [ "${result}" != "$( echo -e "${expectedContents}" )" ]; then
+        Error  "ERROR: Not expected contents in ${filePath}: ${result}"
     fi
 }
 
@@ -515,5 +715,6 @@ function  Error() {
     echo  "${errorMessage}" >&2
     exit  "${exitCode}"
 }
+assert=""  #// This assert indicates to test the exit code
 
 Main  "$@"

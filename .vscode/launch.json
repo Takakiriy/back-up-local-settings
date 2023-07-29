@@ -39,8 +39,11 @@
             "request": "launch",
             "program": "${workspaceFolder}/bin/back-up-files",
             "cwd": "${workspaceFolder}",  // Edit this
-            "args": ["test/3_git_push/.back_up_files.ini"],  // Edit this
+            "args": ["example_project/.back_up_files.ini"],  // Edit this
             "env": {  // Edit this
+                "PATH": "${workspaceFolder}/bin:${env:PATH}",
+
+                // Debug for testExampleProjectSub
                 "ExampleProject": "${workspaceFolder}/example_project",
                 "ExampleProjectBackUp": "${workspaceFolder}/back_up",
                 "FilesFileInBackUp": "${workspaceFolder}/back_up/.back_up_files.ini"

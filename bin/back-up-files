@@ -5,6 +5,7 @@
 #// Command:
 #//     - back-up-files __SettingFileName__
 #//     - back-up-files __SettingFileName__ -r  #// or --restore
+#//     - back-up-files __SettingFileName__ --pull  #// brebase pull and restore
 #//     - back-up-files __SettingFileName__ --branch __BranchName__
 #//     - back-up-files __SettingFileName__ --name __BackUpNameWithWildcard__
 #//     - BackUpRootFolder=back_up  WorkingRootFolder=/home/user/projectX  back-up-files  __SettingFileName__
@@ -16,6 +17,7 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         -r|--restore)  Arguments_Reverse="yes"; shift;;
         -b|--branch)   Arguments_Branch="yes"; shift;;
+        --pull)        Arguments_Pull="yes"; shift;;
         --test)        Arguments_Test="yes"; shift;;
         -*) echo "Unknown option $1"; exit 1;;
         *) PositionalArgs+=("$1"); shift;;
@@ -28,7 +30,7 @@ BackUpMarkFileName="ThisIsBackUp"  #// This is used by checking back up root fol
 
 function  Main() {
     local  settingFilePath="$1"
-    if [ "${Arguments_Reverse}" == "" ]; then
+    if [ "${Arguments_Reverse}" == ""  -a  "${Arguments_Pull}" == "" ]; then
         BackUpFiles backup  "${settingFilePath}"  "${Argument_Branch}"
     else
         BackUpFiles restore  "${settingFilePath}"  "${Argument_Branch}"
@@ -38,7 +40,7 @@ function  Main() {
 function  BackUpFiles() {
     echo  "back-up-local-setting:"
     echo  "root FilesFile: $( readlink -f "${settingFilePath}" )"
-    ReadIniFileAndBackUpFiles  "$1"  "$2"  "$3"  0
+    ReadIniFileAndBackUpFiles  "$1"  "$2"  "$3"  0  "${False}"
 }
 
 function  ReadIniFileAndBackUpFiles() {
@@ -46,6 +48,7 @@ function  ReadIniFileAndBackUpFiles() {
     local  settingFilePath="$2"
     local  branchSpecifiedFromCLI="$3"
     local  callingNestLevel="$4"
+    local  disableGit="$5"  #// ${True} or ${False}
     settingFilePath="$(x="$( GetFullPath  "${settingFilePath}" )" && echo "$x" || echo "(ERROR:$?)" )"
     ExitIfMatched  "${settingFilePath}"  '^\(ERROR:([0-9]*)\)$'
     local  settingFileFolderPath="${settingFilePath%/*}"
@@ -57,11 +60,12 @@ function  ReadIniFileAndBackUpFiles() {
     local  errorCount=0
     local  inExportParameterBlock="${False}"
     local  branch="${branchSpecifiedFromCLI}"
-    local  sectionName=""
+    local  brebaseMainBranch=""
     local  commitMessage="update"
     local  gitPushEnabled="${False}"
     local  gitSSHCommand=""
     local  protectedBranches=""
+    local  sectionName=""
     local  files=( )
     local  secretFiles=( )
     local  exportVariables=( )
@@ -73,21 +77,38 @@ function  ReadIniFileAndBackUpFiles() {
         local  filePathsAfter=""
     fi
 
+    #// Change Git current branch
     local  gitPathAndBranch="$(x="$( ReadGitPathAndBranch "${settingFilePath}" )" && echo "$x" || echo "(ERROR:$?)" )"
+        #// "__Path__:__Branch__"  or  "__Path__:__SubBranch__:__MainBranch__"
     ExitIfMatched  "${gitPathAndBranch}"  '^\(ERROR:([0-9]*)\)$'
     local  backUpGitWorkingFolder="${gitPathAndBranch%:*}"  #// left of :
-    if [ "${branchSpecifiedFromCLI}" == "" ]; then
-        branch="${gitPathAndBranch##*:}"  #// right of :
+    if [ "${backUpGitWorkingFolder%:*}" != "${backUpGitWorkingFolder}" ]; then  #// has :
+        backUpGitWorkingFolder="${backUpGitWorkingFolder%:*}"  #// left of :
     fi
-    if [ "${branch}" != "" ]; then
+    if [ "${branchSpecifiedFromCLI}" == "" ]; then
+        local  rightOfPath="${gitPathAndBranch:${#backUpGitWorkingFolder}}"
+        local  lastPart="${gitPathAndBranch##*:}"  #// right of :
+        if [ "${rightOfPath}" == ":${lastPart}" ]; then
+            branch="${lastPart}"
+        else
+            brebaseMainBranch="${lastPart}"
+            branch="${rightOfPath%:*}"  #// left of :
+            branch="${branch:1}"  #// cut first :
+        fi
+    fi
+    if [ "${branch}" != ""  -a  "${disableGit}" == "${False}" ]; then
         if [ "${backUpGitWorkingFolder}" == "" ]; then
             Error  "Error: BackUpGitWorkingFolder must be specified, if branch was specified."
         fi
         if [ "${backUpOrRestore}" == "backup" ]; then
-            MakeGitWorkingInBackUpIfNew backup  "${backUpGitWorkingFolder}"
+            MakeGitWorkingInBackUpIfNew  backup  "${backUpGitWorkingFolder}"
+        fi
+        if [ -e "${backUpGitWorkingFolder}/.git" ]; then
+            CheckIfGitWorkingIsClean  "${backUpGitWorkingFolder}"
         fi
         previousBranch="$( GetCurrentGitBranch  "${backUpGitWorkingFolder}" )"
         if [ "${branch}" != "${previousBranch}" ]; then
+
             ChangeGitBranch  "${backUpGitWorkingFolder}"  "${branch}"
         fi
         if [ "${backUpOrRestore}" == "restore" ]; then
@@ -96,10 +117,30 @@ function  ReadIniFileAndBackUpFiles() {
             cp -ap  "${thisFileInBackUp}"  "${settingFilePath}"
         fi
     fi
-    AssertExist  "${settingFilePath}"
-    local  settingIniFile="$( cat "${settingFilePath}" )"
+    if [ "${Arguments_Pull}" != ""  -a  "${disableGit}" == "${False}" ]; then
+        echo  "Back up to check if brebase pull command can be executed."
+        echo  "$ back-up-files  \"${settingFilePath}\"  #// back up (not restore) in back-up-files command"
+        ReadIniFileAndBackUpFiles  backup  "${settingFilePath}"  "${branchSpecifiedFromCLI}"  "$(( ${callingNestLevel} + 1 ))"  "${True}"
+        if !( CheckIfGitWorkingIsClean  "${backUpGitWorkingFolder}"  "${False}" ); then
+            local  message="ERROR: brebase pull (git rebase) command requests Git clean status."
+            message="${message} back up contents does not have be executed Git commit. Please back up (Git commit) or restore (reset contents)."
+            echo  "Cancel to back up. Reset Git working to the latest commit."
+            GitCheckOut  "${backUpGitWorkingFolder}"  "${branch}"
+            Error  "${message}"
+        fi
+        echo  ""
+
+        BrebasePull  "${backUpGitWorkingFolder}"  "${branch}"  "${brebaseMainBranch}"
+        local  pullExitCode=$?
+        echo  ""
+        echo  "Resotring ..."
+    else
+        local  pullExitCode=0
+    fi
 
     #// Read a setting .ini file
+    AssertExist  "${settingFilePath}"
+    local  settingIniFile="$( cat "${settingFilePath}" )"
     local  oldIFS="$IFS"
     IFS=$'\n'
     local  settingIniFileLines=( ${settingIniFile} )
@@ -177,7 +218,7 @@ function  ReadIniFileAndBackUpFiles() {
                         local  filesFilePath="${value}"
                         pushd  "${settingFilePath%/*}"  > /dev/null
 
-                        ReadIniFileAndBackUpFiles  "${backUpOrRestore}"  "${filesFilePath}"  "${branchSpecifiedFromCLI}"  "$(( ${callingNestLevel} + 1 ))"
+                        ReadIniFileAndBackUpFiles  "${backUpOrRestore}"  "${filesFilePath}"  "${branchSpecifiedFromCLI}"  "$(( ${callingNestLevel} + 1 ))"  "${disableGit}"
                         popd  > /dev/null
                     else
                         Error  'ERROR: "FilesFile" parameter must be set in "BackUp" section in '"${settingFilePath}"'" file.'
@@ -190,6 +231,8 @@ function  ReadIniFileAndBackUpFiles() {
                     NoOperation  #// This parameter was read in ReadGitPathAndBranch
                 elif [ "${name}" == "BackUpGitBranch" ]; then 
                     NoOperation  #// This parameter was read in ReadGitPathAndBranch
+                elif [ "${name}" == "BrebaseMainBranch" ]; then 
+                    brebaseMainBranch="${value}"
                 elif [ "${name}" == "CommitMessage" ]; then 
                     commitMessage="${value}"
                 elif [ "${name}" == "GitPush" ]; then 
@@ -218,9 +261,11 @@ function  ReadIniFileAndBackUpFiles() {
 
                     #// Back up or restore files (1)
                     EchoBackUpPaths  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${settingFilePath}"
+                    echo  "start --------------------------------"
                     CheckNoError  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${settingFilePath}"
                     BackUpOrRestoreFiles   "${backUpOrRestore}"  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${files[@]}"
                     BackUpOrRestoreSecret  "${backUpOrRestore}"  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${secretFiles[@]}"
+                    echo  "end --------------------------------"
                 fi
                 files=( )
                 secretFiles=( )
@@ -240,15 +285,17 @@ function  ReadIniFileAndBackUpFiles() {
 
         #// Back up or restore files (2)
         EchoBackUpPaths  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${settingFilePath}"
+        echo  "start --------------------------------"
         CheckNoError  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${settingFilePath}"
         BackUpOrRestoreFiles   "${backUpOrRestore}"  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${files[@]}"
         BackUpOrRestoreSecret  "${backUpOrRestore}"  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${secretFiles[@]}"
+        echo  "end --------------------------------"
     fi
     if [ "${backUpGitWorkingFolder}" == "" ]; then
         backUpGitWorkingFolder="${backUpBaseFolder}"
     fi
     if [ "${backUpOrRestore}" == "restore" ]; then
-        echo  "FilesFile:  ${settingFileFolderPath}"
+        echo  "FilesFile: ${settingFileFolderPath}"
         echo  "BackUpGitWorkingFolder: ${backUpGitWorkingFolder}"
         if [ "${branch}" != "" ]; then
             echo  "BackUpGitBranch: ${branch}"
@@ -267,19 +314,38 @@ function  ReadIniFileAndBackUpFiles() {
     if [ "${errorCount}" != 0 ]; then
         Error  "Error count: ${errorCount}"
     fi
-    if [ "${branch}" != ""  -a  "${backUpOrRestore}" == "backup" ]; then
+    if [ "${branch}" != ""  -a  "${backUpOrRestore}" == "backup"  -a  "${disableGit}" == "${False}" ]; then
+        echo  "Files were copied."
 
         #// GitCommit
-        echo  "FilesFile:  ${settingFilePath}"
         echo  "BackUpGitWorkingFolder: ${backUpGitWorkingFolder}"
         echo  "BackUpGitBranch: ${branch}"
         EditGitPushEnabledIfProtected  "${settingFilePath}"  "${branch}"  "${protectedBranches}"
         EditGitPushEnabledIfProtected  "${thisFileInBackUp}"  "${branch}"  "${protectedBranches}"
+        if [ "${brebaseMainBranch}" == "" ]; then
 
-        GitCommit  "${backUpGitWorkingFolder}"  "${branch}"  "${commitMessage}"  "${gitPushEnabled}"  "${gitSSHCommand}"  "${protectedBranches}"
+            GitCommit  "${backUpGitWorkingFolder}"  "${branch}"  "${commitMessage}"  "${gitPushEnabled}"  "${gitSSHCommand}"  "${protectedBranches}"
+        else
+            GitCommit  "${backUpGitWorkingFolder}"  "${branch}"  "${commitMessage}"  "${False}"  "${gitSSHCommand}"  "${protectedBranches}"
+
+            #// Brebase
+            CheckIfBrebaseStatusIsNotBehind  "${backUpGitWorkingFolder}"  "${branch}"  "${brebaseMainBranch}"
+
+            BrebasePush  "${backUpGitWorkingFolder}"  "${branch}"  "${brebaseMainBranch}"  #// branch --> main feature
+            if [ "${gitPushEnabled}" == "${True}" ]; then
+                GitPush  "${backUpGitWorkingFolder}"  "${brebaseMainBranch}"  "${gitSSHCommand}"  "${protectedBranches}"  #// main feature --> develop
+            fi
+        fi
     fi
+
+    #// Echo last message
     if [ "${backUpOrRestore}" == "restore"  -a  "${callingNestLevel}" == 0 ]; then
-        echo  "Restored"
+        if [ "${Arguments_Pull}" == "" ]; then
+            echo  "Restored"
+        else
+            echo  "Git pull (merge) and restored"
+            return  "${pullExitCode}"
+        fi
     fi
 }
 
@@ -294,6 +360,7 @@ function  ReadGitPathAndBranch() {
     local  sectionName=""
     local  backUpGitWorkingFolder=""
     local  backUpGitBranch=""
+    local  brebaseMainBranch=""
 
     for  line  in "${settingIniFileLines[@]}"; do
         local  lineType="$( ParseIniFileLineType  "${line}" )"
@@ -306,25 +373,43 @@ function  ReadGitPathAndBranch() {
                 DefineVariable  "${name}"  "${variableValue}"
             elif [ "${name}" == "BackUpGitWorkingFolder" ]; then
                 if [ "${backUpGitWorkingFolder}" != "" ]; then
-                    echo  "Error: BackUpGitWorkingFolder must be specidied 1 time"
+                    echo  "Error: BackUpGitWorkingFolder must be specidied 1 time"  >&2
                 fi
                 local  value="$( ParseIniFileParameterValue  "${line}" )"
                 value="$( Evaluate "${value}" )"
                 backUpGitWorkingFolder="$( EvaluateAndGetFullPath  "${value}"  "${settingFileFolderPath}" )"
             elif [ "${name}" == "BackUpGitBranch" ]; then
                 if [ "${backUpGitBranch}" != "" ]; then
-                    echo  "Error: backUpGitBranch must be specidied 1 time"
+                    echo  "Error: BackUpGitBranch must be specidied 1 time"  >&2
                 fi
                 local  value="$( ParseIniFileParameterValue  "${line}" )"
                 value="$( Evaluate "${value}" )"
                 backUpGitBranch="$( EvaluateAndGetFullPath  "${value}"  "${settingFileFolderPath}" )"
+            elif [ "${name}" == "BrebaseMainBranch" ]; then
+                if [ "${brebaseMainBranch}" != "" ]; then
+                    echo  "Error: BrebaseMainBranch must be specidied 1 time"  >&2
+                fi
+                local  value="$( ParseIniFileParameterValue  "${line}" )"
+                value="$( Evaluate "${value}" )"
+                brebaseMainBranch="$( EvaluateAndGetFullPath  "${value}"  "${settingFileFolderPath}" )"
             fi
         elif [ "${lineType}" == "section" ]; then
             sectionName="$( ParseIniFileSectionName "${line}" )"
         fi
     done
-
-    echo  "${backUpGitWorkingFolder}:${backUpGitBranch}"
+    if [ "${backUpGitWorkingFolder}" != ""  -o  "${backUpGitBranch}" != ""  -o  "${brebaseMainBranch}" != "" ]; then
+        if [ "${backUpGitWorkingFolder}" != ""  -a  "${backUpGitBranch}" != "" ]; then
+            if [ "${brebaseMainBranch}" == "" ]; then
+                echo  "${backUpGitWorkingFolder}:${backUpGitBranch}"
+            else
+                echo  "${backUpGitWorkingFolder}:${backUpGitBranch}:${brebaseMainBranch}"
+            fi
+        else
+            Error  "ERROR: Both BackUpGitWorkingFolder and BackUpGitBranch must be specidied in \"${settingFilePath}\""
+        fi
+    else
+        echo  ""
+    fi
 }
 
 function  ReadFilePaths() {
@@ -422,8 +507,17 @@ function  EditGitPushEnabledIfProtected() {
         return
     fi
     if IsProtectedBranch  "${branch}" "${protectedBranches}"; then
+
         SetVariableValue  "GitPush"  "false"  "${settingFilePath}"
     fi
+}
+
+function  EchoGitLogTree() {
+    local  backUpGitWorkingFolder="$1"
+    pushd  "${backUpGitWorkingFolder}"  > /dev/null
+
+    git log --oneline --decorate --graph --branches --tags --remotes --pretty=format:"%h %d %s %an %ad" --date=iso-local  |  head -n 5
+    popd  > /dev/null
 }
 
 function  GitCommit() {
@@ -438,27 +532,79 @@ function  GitCommit() {
     if [ "${gitSSHCommand}" != "" ]; then
         export  GIT_SSH_COMMAND="${gitSSHCommand}"
     fi
+    echo  '$ git add "."  &&  git commit -m '"\"${commitMessage}\"  &&  git push origin \"${branch}\"  #// in back-up-files command"
+    echo  "start --------------------------------"
     AssertExist  "${workingFolderPath}/.git"
 
     pushd  "${workingFolderPath}"  > /dev/null  ||  Error
 
     git status --short
     if [ "$(git status --short)" != "" ]; then
+
         git add "."
         git commit -m "${commitMessage}"
         if [ "${gitPushEnabled}" == "${False}"  -o  "${gitPushEnabled}" == "" ]; then
-            echo  "Updated (no git push)"
+            echo  "end --------------------------------"
+            echo  "back-up-files: Updated (no git push)"
         else
             CheckProtectedBranch  "${workingFolderPath}"  "${branch}"  "${protectedBranches}"
 
             git push origin "${branch}"  ||  Error  "ERROR: git commit was successed, but git push failed in \"${PWD}\". Do git push manually."
-            echo  "Updated and Git Pushed"
+            echo  "end --------------------------------"
+            echo  "back-up-files: Updated and Git Pushed"
         fi
     else
-        echo  "No update"
+        echo  "(No log)"
+        echo  "end --------------------------------"
+        echo  "back-up-files: No update"
     fi
     popd  > /dev/null
     GIT_SSH_COMMAND="${old_GIT_SSH_COMMAND}"
+}
+
+function  GitPush() {
+    local  workingFolderPath="$1"
+    local  branch="$2"
+    local  gitSSHCommand="$3"
+    local  protectedBranches="$4"
+    local  old_GIT_SSH_COMMAND="${GIT_SSH_COMMAND}"
+    if [ "${gitSSHCommand}" != "" ]; then
+        export  GIT_SSH_COMMAND="${gitSSHCommand}"
+    fi
+    echo  "$ git push origin \"${branch}\"  #// in back-up-files command"
+    CheckProtectedBranch  "${workingFolderPath}"  "${branch}"  "${protectedBranches}"
+    pushd  "${workingFolderPath}"  > /dev/null  ||  Error
+
+    git push origin "${branch}"  ||  Error  "ERROR: git commit was successed, but git push failed in \"${PWD}\". Do git push manually."
+    echo  "back-up-files: Backed up and Git Pushed"
+    popd  > /dev/null
+    GIT_SSH_COMMAND="${old_GIT_SSH_COMMAND}"
+}
+
+function  CheckIfBrebaseStatusIsNotBehind() {
+    local  backUpGitWorkingFolder="$1"
+    local  subBranch="$2"
+    local  mainBranch="$3"
+    local  previousBranch="$( GetCurrentGitBranch  "${backUpGitWorkingFolder}" )"
+    ChangeGitBranch  "${backUpGitWorkingFolder}"  "${subBranch}"
+    pushd  "${backUpGitWorkingFolder}"  > /dev/null
+    echo  "$ BREBASE_MAIN_BRANCH="${mainBranch}""
+    echo  "  brebase status"
+
+    local  brebaseStatus="$( BREBASE_MAIN_BRANCH="${mainBranch}" \
+        brebase status )"
+    popd  > /dev/null
+    ChangeGitBranch  "${backUpGitWorkingFolder}"  "${previousBranch}"
+
+    if echo "${brebaseStatus}"  |  grep "Your branch is behind" > /dev/null; then
+        EchoGitLogTree  "${backUpGitWorkingFolder}"
+        local  message="ERROR: git commit was successed but brebase push command was failed,"
+        message="${message} because \"${subBranch}\" branch is behind \"${mainBranch}\" main feature branch"
+        message="${message} in git working \"${backUpGitWorkingFolder}\"."
+        message="${message}"' Plesase merge by "back-up-files --pull" command and run "back-up-files" command again.'
+
+        Error  "${message}"
+    fi
 }
 
 function  IsProtectedBranch() {
@@ -483,6 +629,58 @@ function  CheckProtectedBranch() {
 
     IsProtectedBranch  "${branch}" "${protectedBranches}"  &&  \
         Error  "ERROR: git commit was successed, but specified branch \"${branch}\" is protected in \"${workingFolderPath}\" by a back up setting. Do git push manually."
+}
+
+function  BrebasePush() {
+    local  backUpGitWorkingFolder="$1"
+    local  subBranch="$2"
+    local  mainBranch="$3"
+    local  previousBranch="$( GetCurrentGitBranch  "${backUpGitWorkingFolder}" )"
+    ChangeGitBranch  "${backUpGitWorkingFolder}"  "${subBranch}"
+    pushd  "${backUpGitWorkingFolder}"  > /dev/null
+    echo  "$ cd \"${backUpGitWorkingFolder}\"  #// in back-up-files command"
+    echo  "$ BREBASE_MAIN_BRANCH=\"${mainBranch}\" \\"
+    echo  "  brebase push  #// in back-up-files command"
+    echo  "start --------------------------------"
+    echo  "Current branch: ${subBranch}"
+
+    BREBASE_MAIN_BRANCH="${mainBranch}" \
+        brebase push
+    echo  "end --------------------------------"
+    popd  > /dev/null
+    ChangeGitBranch  "${backUpGitWorkingFolder}"  "${previousBranch}"
+}
+
+function  BrebasePull() {
+    local  backUpGitWorkingFolder="$1"
+    local  subBranch="$2"
+    local  mainBranch="$3"
+    local  previousBranch="$( GetCurrentGitBranch  "${backUpGitWorkingFolder}" )"
+    ChangeGitBranch  "${backUpGitWorkingFolder}"  "${subBranch}"
+    pushd  "${backUpGitWorkingFolder}"  > /dev/null
+    echo  "$ cd \"${backUpGitWorkingFolder}\""
+    echo  "$ BREBASE_MAIN_BRANCH=\"${mainBranch}\" \\"
+    echo  "  brebase pull"
+    echo  "start --------------------------------"
+    echo  "Current branch: ${subBranch}"
+    local  error="${False}"
+
+    BREBASE_MAIN_BRANCH="${mainBranch}" \
+        brebase pull  ||  error="${True}"
+    echo  "end --------------------------------"
+    if [ "${error}" == "${True}" ]; then  #// Resolve conflicts
+        echo  '$ git add "."'
+        git add "."
+        echo  '$ git rebase --continue'
+        git rebase --continue
+    fi
+    popd  > /dev/null
+    ChangeGitBranch  "${backUpGitWorkingFolder}"  "${previousBranch}"
+    if [ "${error}" == "${False}" ]; then
+        return  0
+    else
+        return  2
+    fi
 }
 
 function  EchoBackUpPaths() {
@@ -929,6 +1127,30 @@ function  GetCommitID() {
     popd  > /dev/null
 }
 
+function  CheckIfGitWorkingIsClean() {
+    local  gitWorkingFolderPath="$1"
+    local  errorExit="$2"  #// ${True} or "${False}" or ""="${True}"
+    if [ "${errorExit}" == "" ]; then
+        errorExit="${True}"
+    fi
+    local  isClean="${False}"
+    pushd  "${gitWorkingFolderPath}"  > /dev/null  ||  Error
+
+    if [ "$(git status --short)" == "" ]; then
+        isClean="${True}"
+    fi
+    popd  > /dev/null
+    if [ "${isClean}" == "${False}" ]; then
+        if [ "${errorExit}" == "${True}" ]; then
+
+            Error  "ERROR: Git working \"${gitWorkingFolderPath}\" is not clean"
+        else
+            return  "${False}"
+        fi
+    fi
+    return  "${True}"
+}
+
 function  GetCurrentGitBranch() {
     local  gitWorkingFolderPath="$1"
     pushd  "${gitWorkingFolderPath}"  > /dev/null  ||  Error
@@ -944,6 +1166,24 @@ function  ChangeGitBranch() {
 
     git checkout  "${newCurrentBranch}"  2> /dev/null  ||  git checkout -b  "${newCurrentBranch}" 
     popd  > /dev/null
+}
+
+function  GitCheckOut() {  #// Download a commit
+    local  gitWorkingFolderPath="$1"
+    local  branch="$2"
+    local  oldBranch="$( GetCurrentGitBranch  "${gitWorkingFolderPath}" )"
+    local  hasError="${False}"
+    pushd  "${gitWorkingFolderPath}"  > /dev/null  ||  Error
+    git checkout  "${branch}"  > /dev/null 2>&1  ||  hasError="${True}"
+    if [ "${hasError}" == "${False}" ]; then
+
+        git checkout  "."  > /dev/null 2>&1  ||  hasError="${True}"
+    fi
+    popd  > /dev/null
+    ChangeGitBranch  "${gitWorkingFolderPath}"  "${oldBranch}"
+    if [ "${hasError}" == "${True}" ]; then
+        Error  "ERROR in GitCheckOut"
+    fi
 }
 
 # Evaluate
@@ -1453,6 +1693,60 @@ function  Error() {
 
     echo  "${errorMessage}" >&2
     exit  "${exitCode}"
+}
+
+# pp
+#     Debug print
+# Example:
+#     pp "$config"
+#     pp "$config" config
+#     pp "$array" array  ${#array[@]}  "${array[@]}"
+#     pp "123"
+#     $( pp "$config" >&2 )
+function  pp() {
+    local  value="$1"
+    local  variableName="$2"
+    if [ "${variableName}" != "" ]; then  variableName=" ${variableName} "  ;fi  #// Add spaces
+    local  oldIFS="$IFS"
+    IFS=$'\n'
+    local  valueLines=( ${value} )
+    IFS="$oldIFS"
+
+    local  type=""
+    if [ "${variableName}" != "" ]; then
+        if [[ "$(declare -p ${variableName} 2>&1 )" =~ "declare -a" ]]; then
+            local  type="array"
+        fi
+    fi
+    if [ "${type}" == "" ]; then
+        if [ "${#valueLines[@]}" == 1  -o  "${#valueLines[@]}" == 0 ]; then
+            local  type="oneLine"
+        else
+            local  type="multiLine"
+        fi
+    fi
+
+    if [[ "${type}" == "oneLine" ]]; then
+        echo  "@@@${variableName}= \"${value}\" ---------------------------"  >&2
+    elif [[ "${type}" == "multiLine" ]]; then
+        echo  "@@@${variableName}---------------------------"  >&2
+        echo  "\"${value}\"" >&2
+    elif [[ "${type}" == "array" ]]; then
+        echo  "@@@${variableName}---------------------------"  >&2
+        local  count="$3"
+        if [ "${count}" == "" ]; then
+            echo  "[0]: \"$4\""  >&2
+            echo  "[1]: ERROR: pp parameter is too few"  >&2
+        else
+            local  i=""
+            for (( i = 0; i < ${count}; i += 1 ));do
+                echo  "[$i]: \"$4\""  >&2
+                shift
+            done
+        fi
+    else
+        echo  "@@@${variableName}? ---------------------------"  >&2
+    fi
 }
 
 if [ "${Arguments_Test}" != '' ]; then
