@@ -69,7 +69,7 @@ function  ReadIniFileAndBackUpFiles() {
     local  files=( )
     local  secretFiles=( )
     local  exportVariables=( )
-    if [ "${callingNestLevel}" -gt 1 ]; then
+    if [ "${callingNestLevel}" -gt 2 ]; then  #search: back-up-files too many nest error
         Error  'ERROR: Too many nest level by FilesFile parameter in "'"${settingFilePath}"'" file.'
     fi
     if [ "${backUpOrRestore}" == "restore" ]; then
@@ -123,7 +123,14 @@ function  ReadIniFileAndBackUpFiles() {
         ReadIniFileAndBackUpFiles  backup  "${settingFilePath}"  "${branchSpecifiedFromCLI}"  "$(( ${callingNestLevel} + 1 ))"  "${True}"
         if !( CheckIfGitWorkingIsClean  "${backUpGitWorkingFolder}"  "${False}" ); then
             local  message="ERROR: brebase pull (git rebase) command requests Git clean status."
+            message="${message} path: ${backUpGitWorkingFolder}."
+            message="${message} branch: ${branch}."
             message="${message} back up contents does not have be executed Git commit. Please back up (Git commit) or restore (reset contents)."
+
+            GitDiff  "${backUpGitWorkingFolder}"
+            echo  "$ git status  # in ${backUpGitWorkingFolder}"
+            GitStatusShort  "${backUpGitWorkingFolder}"
+            echo  "ERROR: brebase pull (git rebase) command requests Git clean status."
             echo  "Cancel to back up. Reset Git working to the latest commit."
             GitCheckOut  "${backUpGitWorkingFolder}"  "${branch}"
             Error  "${message}"
@@ -672,7 +679,7 @@ function  BrebasePull() {
         echo  '$ git add "."'
         git add "."
         echo  '$ git rebase --continue'
-        git rebase --continue
+        GIT_EDITOR=true  git rebase --continue
     fi
     popd  > /dev/null
     ChangeGitBranch  "${backUpGitWorkingFolder}"  "${previousBranch}"
@@ -1186,6 +1193,23 @@ function  GitCheckOut() {  #// Download a commit
     fi
 }
 
+function  GitStatusShort() {
+    local  gitWorkingFolderPath="$1"
+    pushd  "${gitWorkingFolderPath}"  > /dev/null  ||  Error
+
+    git status --short
+    popd  > /dev/null
+}
+
+function  GitDiff() {
+    local  gitWorkingFolderPath="$1"
+    pushd  "${gitWorkingFolderPath}"  > /dev/null  ||  Error
+
+    git --no-pager diff
+    popd  > /dev/null
+}
+
+
 # Evaluate
 #     Expand variables
 # Example:
@@ -1542,6 +1566,7 @@ function  TestOtherNewProjectFolder() {
 
 [Git]
 BackUpGitWorkingFolder = "${GitWorkingFolder}/back_up"
+BackUpGitBranch = "develop"
 
 [BackUpFiles]
 WorkingBaseFolder = "serviceX"

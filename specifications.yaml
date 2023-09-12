@@ -30,50 +30,59 @@ Command:
         touch   back_up/ThisIsBackUp
     Call tree:
         back up:
-            Test1Direct:  #ref: ~/back-up-local-settings/test/test.sh
-                test1Sub:
-                    # function  test1Sub() {
-                    #     ${Lib}/back-up-files  "test/1_back_up_restore/.back_up_files.ini"  ||  Error
-                    Main:  #ref: ~/back-up-local-settings/bin/back-up-files
-                        # BackUpFiles backup  "${settingFilePath}"  "${Argument_Branch}"
-                        BackUpFiles:
-                            ReadIniFileAndBackUpFiles:
-                                (Git before copy):
-                                    MakeGitWorkingInBackUpIfNew:
-                                    CheckIfGitWorkingIsClean:
-                                    ChangeGitBranch:
-                                    BrebasePull:
-                                (Back up):
-                                    #// Read a setting .ini file
-                                    # for  line  in "${settingIniFileLines[@]}"; do
-                                    #// Main paramters
-                                    #// Back up or restore files (1)
-                                    #// Back up or restore files (2)
-                                    EchoBackUpPaths:
-                                    CheckNoError:
-                                    BackUpOrRestoreFiles:
-                                        # if [ "${backUpOrRestore}" == "backup" ]; then
-                                        #     CopyFiles  "${workingBaseFolder}"  "${backUpBaseFolder}"  "$@"  >  /dev/null
-                                        # elif [ "${backUpOrRestore}" == "restore" ]; then
-                                        #     CopyFiles  "${backUpBaseFolder}"  "${workingBaseFolder}"  "$@"
-                                        CopyFiles:
-                                            cp -fap  "${workingBaseFolder}/${filePath}"  "${destinationBaseFolder}/${filePath}"
-                                    BackUpOrRestoreSecret:
-                                        # if [ "${backUpOrRestore}" == "backup" ]; then
-                                            zip -e --password="${password}"  "${backUpBaseFolder}/${filePath}.zip"  "${filePathInZip}"  > /dev/null
-                                        # elif [ "${backUpOrRestore}" == "restore" ]; then
-                                        #     unzip -o -P "${password}"  "${backUpBaseFolder}/${filePath}.zip"  "${filePathInZip}"  > /dev/null
-                                    #// Back up a files file
-                                (Git after copy):
-                                    #// DeleteOtherBranchFiles
-                                    #// GitCommit
-                                    GitCommit:
-                                        git add "."
-                                        git commit -m "${commitMessage}"
-                                        git push origin "${branch}"
-                                    #// Brebase
-                                    BrebasePush:
-                                        brebase push
+            #     ${Lib}/back-up-files  "test/1_back_up_restore/.back_up_files.ini"  ||  Error
+            Main:  #ref: ~/back-up-local-settings/bin/back-up-files
+                # BackUpFiles backup  "${settingFilePath}"  "${Argument_Branch}"
+                BackUpFiles:
+                    ReadIniFileAndBackUpFiles:
+                        (Git before copy):
+                            #// Change Git current branch
+                            MakeGitWorkingInBackUpIfNew:
+                            CheckIfGitWorkingIsClean:
+                            ChangeGitBranch:
+                            # if [ "${backUpOrRestore}" == "restore" ]; then
+                            #     cp -ap  "${thisFileInBackUp}"  "${settingFilePath}"
+                            BrebasePull:
+                        (Back up):
+                            #// Read a setting .ini file
+                            # for  line  in "${settingIniFileLines[@]}"; do
+                            #// Main paramters
+                            #// Back up or restore files (1)
+                            #// Back up or restore files (2)
+                            EchoBackUpPaths:
+                            CheckNoError:
+                            BackUpOrRestoreFiles:
+                                # if [ "${backUpOrRestore}" == "backup" ]; then
+                                #     CopyFiles  "${workingBaseFolder}"  "${backUpBaseFolder}"  "$@"  >  /dev/null
+                                # elif [ "${backUpOrRestore}" == "restore" ]; then
+                                #     CopyFiles  "${backUpBaseFolder}"  "${workingBaseFolder}"  "$@"
+                                CopyFiles:
+                                    cp -fap  "${workingBaseFolder}/${filePath}"  "${destinationBaseFolder}/${filePath}"
+                            BackUpOrRestoreSecret:
+                                # if [ "${backUpOrRestore}" == "backup" ]; then
+                                    zip -e --password="${password}"  "${backUpBaseFolder}/${filePath}.zip"  "${filePathInZip}"  > /dev/null
+                                # elif [ "${backUpOrRestore}" == "restore" ]; then
+                                #     unzip -o -P "${password}"  "${backUpBaseFolder}/${filePath}.zip"  "${filePathInZip}"  > /dev/null
+                            #// Back up a files file
+                        (Git after copy):
+                            #// DeleteOtherBranchFiles
+                            #// GitCommit
+                            GitCommit:
+                                git add "."
+                                git commit -m "${commitMessage}"
+                                git push origin "${branch}"
+                            #// Brebase
+                            BrebasePush:
+                                brebase push
+    Note:
+        Too many nest level by FilesFile parameter エラーについての補足: |  #keyword: back-up-files too many nest error
+            最大の深さは 3 に変える。なぜなら restore する前に brebase pull が実行できる clean であることをチェックするためにバックアップするため。
+            Level 1) restore ./back-up-local-settings.ini
+                echo  "Back up to check if brebase pull command can be executed."
+                Level 2) backup ./back-up-local-settings.ini
+                    Level 3) backup ./working/.back_up_files.ini
+                        if [ "${callingNestLevel}" -gt 1 ]; then
+                            Error  'ERROR: Too many nest level by FilesFile parameter in "'"${settingFilePath}"'" file.'
 Test:
     Commands:
         cd  __Project__
@@ -82,8 +91,10 @@ Test:
     Integrated Test Call Tree:  #ref: ${GitHub}/MyPrivateCode/bash/back-up-files/test/test.sh
         #// test/test.sh
         (Test1):
-            Test1Direct:
-                # ${Lib}/back-up-files  "test/1_back_up_restore/.back_up_files.ini"
+            Test1Direct:  #ref: ~/back-up-local-settings/test/test.sh
+                test1Sub:
+                    # function  test1Sub() {
+                    #     ${Lib}/back-up-files  "test/1_back_up_restore/.back_up_files.ini"  ||  Error
             Test1ScriptSimple:
                 # ${Bin}/back-up-example
                 back-up-example:

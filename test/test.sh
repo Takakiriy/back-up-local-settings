@@ -227,8 +227,10 @@ function  TestBrebase() {
         cd  "${GitWorkingFolder}/back_up"
         $assert  git status  |  grep  "rebase in progress" > /dev/null  &&  Error  #// Not rebase in progress
         $assert  git status  |  grep  "clean" > /dev/null  ||  Error
-        local  conflictText='<<<<<<< HEAD\nUpdated by theirs\n=======\nUpdated by ours\n>>>>>>> updated\n'
-        AssertContents  "a.txt"  "${conflictText}"
+        local  conflictText="$( cat "a.txt" )"
+        local  conflictTextWithoutHash="$( cat "a.txt"  |  sed -E 's/>>>>>>> [0-9a-f]* \(updated\)/>>>>>>> updated/' )"  #// Conflict tag in git 2.41.0 has a commit ID.
+        local  conflictTextAnswer="$( echo -e '<<<<<<< HEAD\nUpdated by theirs\n=======\nUpdated by ours\n>>>>>>> updated\n' )"
+        test  "${conflictTextWithoutHash}" == "${conflictTextAnswer}"  ||  Error
         cd  "${GitWorkingFolder}"
         AssertContents  "${GitWorkingFolder}/test/brebase/a.txt"  "${conflictText}"
 

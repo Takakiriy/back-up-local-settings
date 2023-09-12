@@ -10,7 +10,7 @@
 
 <!-- TOC depthFrom:1 -->
 - [back-up-local-settings, .gitignore back-up-files](#back-up-local-settings-gitignore-back-up-files)
-  - [基本的なバックアップ](#基本的なバックアップとリストア)
+  - [基本的なバックアップとリストア](#基本的なバックアップとリストア)
   - [バックアップの管理](#バックアップの管理)
   - [環境変数](#環境変数)
   - [Git リポジトリ対応](#git-リポジトリ対応)
