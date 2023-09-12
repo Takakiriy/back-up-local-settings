@@ -856,7 +856,7 @@ function  GetRelativePathInZip() {
 }
 
 function  GetFullPath() {
-    local  relativePath="$1"
+    local  relativePath="$1"  #// or full path
     local  basePath="$2"
     local  option="$3"
     if [ "${option}" == "--touch" ]; then
@@ -1128,9 +1128,13 @@ function  CutLastOf() {
 
 function  GetCommitID() {
     local  gitWorkingFolderPath="$1"
+    local  branch="$2"
+    if [ "${branch}" == "" ]; then
+        branch="HEAD"
+    fi
     pushd  "${gitWorkingFolderPath}"  > /dev/null  ||  Error
 
-    git rev-parse --short HEAD
+    git rev-parse --short "${branch}"
     popd  > /dev/null
 }
 
