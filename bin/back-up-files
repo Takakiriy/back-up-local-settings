@@ -262,7 +262,7 @@ function  ReadIniFileAndBackUpFiles() {
             local  newSectionName="$( ParseIniFileSectionName "${line}" )"
             if [ "${sectionName}" == "BackUpFiles" ]; then
                 if [ "${branch}" != ""  -a  "${backUpGitWorkingFolder}" == "" ]; then
-                    echo  "Error: BackUpGitWorkingFolder must be specidied before any section"
+                    echo  "Error: BackUpGitWorkingFolder must be specified before any section"
                 fi
                 if [ "${workingBaseFolder}" != ""  -a  "${backUpBaseFolder}" != "" ]; then
 
@@ -380,21 +380,21 @@ function  ReadGitPathAndBranch() {
                 DefineVariable  "${name}"  "${variableValue}"
             elif [ "${name}" == "BackUpGitWorkingFolder" ]; then
                 if [ "${backUpGitWorkingFolder}" != "" ]; then
-                    echo  "Error: BackUpGitWorkingFolder must be specidied 1 time"  >&2
+                    echo  "Error: BackUpGitWorkingFolder must be specified 1 time"  >&2
                 fi
                 local  value="$( ParseIniFileParameterValue  "${line}" )"
                 value="$( Evaluate "${value}" )"
                 backUpGitWorkingFolder="$( EvaluateAndGetFullPath  "${value}"  "${settingFileFolderPath}" )"
             elif [ "${name}" == "BackUpGitBranch" ]; then
                 if [ "${backUpGitBranch}" != "" ]; then
-                    echo  "Error: BackUpGitBranch must be specidied 1 time"  >&2
+                    echo  "Error: BackUpGitBranch must be specified 1 time"  >&2
                 fi
                 local  value="$( ParseIniFileParameterValue  "${line}" )"
                 value="$( Evaluate "${value}" )"
                 backUpGitBranch="$( EvaluateAndGetFullPath  "${value}"  "${settingFileFolderPath}" )"
             elif [ "${name}" == "BrebaseMainBranch" ]; then
                 if [ "${brebaseMainBranch}" != "" ]; then
-                    echo  "Error: BrebaseMainBranch must be specidied 1 time"  >&2
+                    echo  "Error: BrebaseMainBranch must be specified 1 time"  >&2
                 fi
                 local  value="$( ParseIniFileParameterValue  "${line}" )"
                 value="$( Evaluate "${value}" )"
@@ -412,7 +412,7 @@ function  ReadGitPathAndBranch() {
                 echo  "${backUpGitWorkingFolder}:${backUpGitBranch}:${brebaseMainBranch}"
             fi
         else
-            Error  "ERROR: Both BackUpGitWorkingFolder and BackUpGitBranch must be specidied in \"${settingFilePath}\""
+            Error  "ERROR: Both BackUpGitWorkingFolder and BackUpGitBranch must be specified in \"${settingFilePath}\""
         fi
     else
         echo  ""
