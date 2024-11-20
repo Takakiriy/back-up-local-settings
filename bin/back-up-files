@@ -950,8 +950,8 @@ function  NotCommonLines() {
     local  rightLines="$2"
     local  direction="$3"
     local  notUsedCharacter="$4"
-    rightLines="$( echo  "${rightLines}"  |  sed 's/$/:/' )"  #// Add "notUsedCharacter" to the last
-    local  merged="$( AppendToNextLine  "${leftLines}"  "${rightLines}"  |  sort )"
+    rightLines="$( echo  "${rightLines}"  |  sed 's/$/!/' )"  #// Add "notUsedCharacter" to the last
+    local  merged="$( AppendToNextLine  "${leftLines}"  "${rightLines}"  |  sort )"  #// "notUsedCharacter" ascii code must be smaller.
     local  oldIFS="$IFS"
     IFS=$'\n'
     local  mergedLines=( ${merged} )
@@ -959,15 +959,15 @@ function  NotCommonLines() {
     local  previousLine=""
     local  line=""
     if [ "${direction}" != "left" ]; then  Error  ;fi
-    if [ "${notUsedCharacter}" != ":" ]; then  Error  ;fi
+    if [ "${notUsedCharacter}" != "!" ]; then  Error  ;fi
 
     for  line  in "${mergedLines[@]}"; do
         if [ "${line}" == "" ]; then
             NoOperation
-        elif [ "${line}" == "${previousLine}:" ]; then  #// both exists
+        elif [ "${line}" == "${previousLine}!" ]; then  #// both exists
             #// skip
             previousLine=""
-        elif [ "${line##*:}" == "" ]; then  #// last character is "notUsedCharacter"
+        elif [ "${line##*!}" == "" ]; then  #// last character is "notUsedCharacter"
             if [ "${previousLine}" != "" ]; then
                 echo  "${previousLine}"
             fi
