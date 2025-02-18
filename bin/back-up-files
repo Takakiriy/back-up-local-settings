@@ -984,6 +984,17 @@ function  NotCommonLines() {
     fi
 }
 
+function  TestOfNotCommonLines() {
+    local  a1=\
+"aaa
+bbb"
+    local  a2=\
+"bbb
+ccc"
+    echo  "1:"
+    NotCommonLines  "${a1}"  "${a2}"  "left"  "!"   #// "aaa"
+}
+
 function  ParseIniFileLineType() {
     local  line="$1"
     local  words=$( echo "${line}" | xargs )
