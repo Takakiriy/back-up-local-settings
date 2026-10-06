@@ -15,10 +15,10 @@
 PositionalArgs=()
 while [[ $# -gt 0 ]]; do
     case $1 in
-        -r|--restore)  Arguments_Reverse="yes"; shift;;
-        -b|--branch)   Arguments_Branch="yes"; shift;;
-        --pull)        Arguments_Pull="yes"; shift;;
-        --test)        Arguments_Test="yes"; shift;;
+        -r|--restore)  Options_Reverse="yes"; shift;;
+        -b|--branch)   Options_Branch="$2"; shift; shift;;
+        --pull)        Options_Pull="yes"; shift;;
+        --test)        Options_Test="yes"; shift;;
         -*) echo "Unknown option $1"; exit 1;;
         *) PositionalArgs+=("$1"); shift;;
     esac
@@ -30,10 +30,10 @@ BackUpMarkFileName="ThisIsBackUp"  #// This is used by checking back up root fol
 
 function  Main() {
     local  settingFilePath="$1"
-    if [ "${Arguments_Reverse}" == ""  -a  "${Arguments_Pull}" == "" ]; then
-        BackUpFiles backup  "${settingFilePath}"  "${Argument_Branch}"
+    if [ "${Options_Reverse}" == ""  -a  "${Options_Pull}" == "" ]; then
+        BackUpFiles backup  "${settingFilePath}"  "${Options_Branch}"
     else
-        BackUpFiles restore  "${settingFilePath}"  "${Argument_Branch}"
+        BackUpFiles restore  "${settingFilePath}"  "${Options_Branch}"
     fi
 }
 
@@ -96,8 +96,8 @@ function  ReadIniFileAndBackUpFiles() {
             branch="${branch:1}"  #// cut first :
         fi
     fi
-    if [ "${branch}" != ""  -a  "${disableGit}" == "${False}" ]; then
-        if [ "${backUpGitWorkingFolder}" == "" ]; then
+    if [ "${branch}" != "" ] && [ "${disableGit}" == "${False}" ]; then
+        if [ "${backUpGitWorkingFolder}" == "" ] && [ "${gitPathAndBranch}" != "" ]; then
             Error  "Error: BackUpGitWorkingFolder must be specified, if branch was specified."
         fi
         if [ "${backUpOrRestore}" == "backup" ]; then
@@ -117,7 +117,7 @@ function  ReadIniFileAndBackUpFiles() {
             cp -ap  "${thisFileInBackUp}"  "${settingFilePath}"
         fi
     fi
-    if [ "${Arguments_Pull}" != ""  -a  "${disableGit}" == "${False}" ]; then
+    if [ "${Options_Pull}" != "" ] && [ "${disableGit}" == "${False}" ]; then
         echo  "Back up to check if brebase pull command can be executed."
         echo  "$ back-up-files  \"${settingFilePath}\"  #// back up (not restore) in back-up-files command"
         ReadIniFileAndBackUpFiles  backup  "${settingFilePath}"  "${branchSpecifiedFromCLI}"  "$(( ${callingNestLevel} + 1 ))"  "${True}"
@@ -261,10 +261,10 @@ function  ReadIniFileAndBackUpFiles() {
         elif [ "${lineType}" == "section" ]; then
             local  newSectionName="$( ParseIniFileSectionName "${line}" )"
             if [ "${sectionName}" == "BackUpFiles" ]; then
-                if [ "${branch}" != ""  -a  "${backUpGitWorkingFolder}" == "" ]; then
+                if [ "${branch}" != "" ] && [ "${backUpGitWorkingFolder}" == "" ]; then
                     echo  "Error: BackUpGitWorkingFolder must be specified before any section"
                 fi
-                if [ "${workingBaseFolder}" != ""  -a  "${backUpBaseFolder}" != "" ]; then
+                if [ "${workingBaseFolder}" != "" ] && [ "${backUpBaseFolder}" != "" ]; then
 
                     #// Back up or restore files (1)
                     EchoBackUpPaths  "${workingBaseFolder}"  "${backUpBaseFolder}"  "${settingFilePath}"
@@ -347,7 +347,7 @@ function  ReadIniFileAndBackUpFiles() {
 
     #// Echo last message
     if [ "${backUpOrRestore}" == "restore"  -a  "${callingNestLevel}" == 0 ]; then
-        if [ "${Arguments_Pull}" == "" ]; then
+        if [ "${Options_Pull}" == "" ]; then
             echo  "Restored"
         else
             echo  "Git pull (merge) and restored"
@@ -378,6 +378,7 @@ function  ReadGitPathAndBranch() {
                 local  value="$( ParseIniFileParameterValue  "${line}" )"
                 local  variableValue="$( EvaluateAndGetFullPath "${value}"  "${settingFileFolderPath}" )"
                 DefineVariable  "${name}"  "${variableValue}"
+                echo  "Variables: ${name}=\"${variableValue}\""  >&2
             elif [ "${name}" == "BackUpGitWorkingFolder" ]; then
                 if [ "${backUpGitWorkingFolder}" != "" ]; then
                     echo  "Error: BackUpGitWorkingFolder must be specified 1 time"  >&2
@@ -404,8 +405,8 @@ function  ReadGitPathAndBranch() {
             sectionName="$( ParseIniFileSectionName "${line}" )"
         fi
     done
-    if [ "${backUpGitWorkingFolder}" != ""  -o  "${backUpGitBranch}" != ""  -o  "${brebaseMainBranch}" != "" ]; then
-        if [ "${backUpGitWorkingFolder}" != ""  -a  "${backUpGitBranch}" != "" ]; then
+    if [ "${backUpGitWorkingFolder}" != "" ] || [ "${backUpGitBranch}" != "" ] || [ "${brebaseMainBranch}" != "" ]; then
+        if [ "${backUpGitWorkingFolder}" != "" ] && [ "${backUpGitBranch}" != "" ]; then
             if [ "${brebaseMainBranch}" == "" ]; then
                 echo  "${backUpGitWorkingFolder}:${backUpGitBranch}"
             else
@@ -1191,6 +1192,10 @@ function  ChangeGitBranch() {
     popd  > /dev/null
 }
 
+function  GetCurrentGitCommitID() {
+    git rev-parse --short HEAD
+}
+
 function  GitCheckOut() {  #// Download a commit
     local  gitWorkingFolderPath="$1"
     local  branch="$2"
@@ -1790,14 +1795,14 @@ function  pp() {
     fi
 }
 
-if [ "${Arguments_Test}" != '' ]; then
+if [ "${Options_Test}" != '' ]; then
     GitWorkingFolder="${PWD}"  #// This project folder path.  User does not use this variable.
 fi
 True=0
 False=1
 GitInitOption=$(gitInitOption) 
 
-if [ "${Arguments_Test}" != '' ]; then
+if [ "${Options_Test}" != '' ]; then
     TestAll
 else
     Main  "$@"
